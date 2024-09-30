@@ -64,3 +64,25 @@ class Metrics:
         }
 
         return results
+
+
+if __name__ == '__main__':
+
+    # 假设我们有一个3类的语义分割任务
+    class_num = 3
+    metrics = Metrics(class_num)
+
+    # 模拟一些样本的真实标签和预测标签
+    true_vectors = torch.tensor([0, 1, 2, 1, 0, 2, 2, 1, 0, 1])
+    pred_vectors = torch.tensor([0, 2, 2, 1, 0, 2, 0, 1, 1, 1])
+
+    # 将这些样本添加到混淆矩阵中
+    metrics.sample_add(true_vectors, pred_vectors)
+
+    # 计算所有的指标
+    results = metrics.compute()
+
+    # 输出结果
+    print("评估指标:")
+    for key, value in results.items():
+        print(f"{key}: {value}")

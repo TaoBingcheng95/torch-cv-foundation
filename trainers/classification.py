@@ -23,8 +23,8 @@ from torchmetrics.classification import (
 )
 from torchvision.models._api import WeightsEnum
 
-from ..geodatasets import RGBBandsMissingError, unbind_samples
-from ..models import get_weight
+from geodatasets import RGBBandsMissingError, unbind_samples
+from models.components import get_weight
 from . import utils
 from .base import BaseTask
 

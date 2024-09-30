@@ -5,7 +5,6 @@ from torchvision import datasets
 from torch.utils.data import Dataset, DataLoader, random_split
 
 
-
 class FashionMNISTLoader:
     def __init__(self, root='./data', train=True, transform=None, target_transform=None, download=False, val_split = 0.4):
         super(FashionMNISTLoader, self).__init__()

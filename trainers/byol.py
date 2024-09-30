@@ -14,7 +14,7 @@ from kornia import augmentation as K
 from torch import Tensor
 from torchvision.models._api import WeightsEnum
 
-from ..models import get_weight
+from models.components import get_weight
 from . import utils
 from .base import BaseTask
 

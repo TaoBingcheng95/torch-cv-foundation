@@ -14,10 +14,22 @@ import warnings
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, ClassVar, cast
 #TODO replace fiona by rasterio
-import fiona
-import fiona.transform
+try:
+    import fiona
+    import fiona.transform
+except ImportError as e:
+    warnings.warn(
+        'geodatasets requires rasterio and fiona to be installed. '
+        'Please install them using `pip install rasterio fiona`.'
+    )
 import numpy as np
-import pyproj
+try:
+    import pyproj
+except ImportError as e:
+    warnings.warn(
+        'geodatasets requires pyproj to be installed. '
+        'Please install it using `pip install pyproj`.'
+    )
 import rasterio
 import rasterio.merge
 import shapely
@@ -87,7 +99,10 @@ class GeoDataset(Dataset[dict[str, Any]], abc.ABC):
     """
 
     paths: Path | Iterable[Path]
-    _crs = CRS.from_epsg(4326)
+    try:
+        _crs = CRS.from_epsg(4326)
+    except rasterio.errors.CRSError as e:
+        print(e)
     _res = 0.0
 
     #: Glob expression used to search for files.

@@ -28,9 +28,10 @@ from torch.optim.lr_scheduler import (
 )
 from torchvision.models._api import WeightsEnum
 
-import torchgeo.transforms as T
+# import torchgeo.transforms as T
+import torchvision.transforms as T
 
-from ..models import get_weight
+from models.components import get_weight
 from . import utils
 from .base import BaseTask
 

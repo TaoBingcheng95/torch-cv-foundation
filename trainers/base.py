@@ -11,6 +11,7 @@ import lightning
 from lightning.pytorch import LightningModule
 from torch.optim import AdamW  # type: ignore[attr-defined]
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+# from lightning.pytorch.utilities.types import OptimizerLRSchedulerConfig
 
 
 class BaseTask(LightningModule, ABC):

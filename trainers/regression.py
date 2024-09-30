@@ -16,8 +16,8 @@ from torch import Tensor
 from torchmetrics import MeanAbsoluteError, MeanSquaredError, MetricCollection
 from torchvision.models._api import WeightsEnum
 
-from ..geodatasets import RGBBandsMissingError, unbind_samples
-from ..models import FCN, get_weight
+from geodatasets import RGBBandsMissingError, unbind_samples
+from models.components import FCN, get_weight
 from . import utils
 from .base import BaseTask
 
