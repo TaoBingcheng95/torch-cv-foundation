@@ -4,13 +4,14 @@ import os
 import sys
 import time
 import datetime
+import copy
+
+from PIL import Image
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import copy
 from loguru import logger
-
 # import logging
 # logging.basicConfig(level=logging.INFO)
 # logger = logging.getLogger(__name__)
@@ -26,30 +27,45 @@ from Metrics import Metrics
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-# 定义数据预处理操作，主要包括图像调整大小和归一化
-image_size = 28
-transform = transforms.Compose([
-    transforms.Resize(size=image_size),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
-])
 
 
-def train_val_data_process(root='./data', val_ratio=0.4, batch_size=32, num_workers=0):
+def FashionMNIST_loader(root='./data', val_ratio=0.4, batch_size=32, num_workers=0):
     """
     加载FashionMNIST训练集数据
     此时train_data是完整数据集 未划分
     """
-    train_data = FashionMNIST(
+
+    # 定义数据预处理操作，主要包括图像调整大小和归一化
+    image_size = 28
+    transform = transforms.Compose([
+        transforms.Resize(size=image_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+
+    # 对于Windows用户，这里应设置为0，否则会出现多线程错误
+    if sys.platform.startswith('win'):
+        num_workers = 0
+    else:
+        num_workers = 4
+
+    train_ds = FashionMNIST(
         root=root,
         train=True,
         download=True,
         transform=transform
     )
-    train_count = len(train_data)
-    train_data, val_data = random_split(train_data,
+    train_count = len(train_ds)
+    train_data, val_data = random_split(train_ds,
                                         [round((1-val_ratio) * train_count), round(val_ratio * train_count)])
- 
+
+    test_ds = FashionMNIST(
+        root=root,
+        train=False,
+        download=True,
+        transform=transform
+    )
+
     train_dataloader = DataLoader(
         dataset=train_data,
         batch_size=batch_size,
@@ -63,8 +79,15 @@ def train_val_data_process(root='./data', val_ratio=0.4, batch_size=32, num_work
         shuffle=True,
         num_workers=num_workers
     )
+
+    test_dataloader = DataLoader(
+        dataset=test_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers
+    )
  
-    return train_dataloader, val_dataloader
+    return train_dataloader, val_dataloader, test_dataloader
 
 
 def setup_logging(output_dir):
@@ -85,6 +108,7 @@ class Trainer:
     def __init__(self, model:nn.Module,
                  train_dl:DataLoader=None,
                  val_dl:DataLoader=None,
+                 test_dl: DataLoader = None,
                  device:str='cuda:0',
                  num_classes:int=10,
                  criterion:nn.Module=nn.CrossEntropyLoss(),
@@ -115,6 +139,7 @@ class Trainer:
 
         self.train_dataloader = train_dl
         self.val_dataloader = val_dl
+        self.test_dataloader = test_dl
 
         # 定义损失函数
         # CrossEntropyLoss 是用于多分类问题的损失函数，特别适用于分类任务。
@@ -206,9 +231,7 @@ class Trainer:
         # 训练数据的处理、损失计算、反向传播、参数更新
         for epoch in range(self.epochs):
             self.train_step(epoch)
-
             self.val_step(epoch)
-
             if self.val_acc_all[-1] > best_acc:  # 如果当前epoch的验证准确率大于历史最佳准确率
                 best_acc = self.val_acc_all[-1]  # 更新最佳验证准确率
                 # 深拷贝当前模型的参数权重，保存最佳模型
@@ -240,12 +263,13 @@ class Trainer:
         # 初始化样本数量
         total_samples = 0
         self.model.train()
+        train_count = len(self.train_dataloader)
         try:
-            for i, batch in tqdm(enumerate(self.train_dataloader), total=len(self.train_dataloader), desc=f'Train {epoch}/{self.epochs}'):
+            for i, batch in tqdm(enumerate(self.train_dataloader), total=train_count, desc=f'Train {epoch}/{self.epochs}'):
                 images, labels = batch
                 images = images.to(self.device)
                 labels = labels.to(self.device)
-                bs = images.size(0)
+                bs = labels.size(0)
 
                 # 反向传播前将梯度清零
                 self.optimizer.zero_grad()
@@ -257,15 +281,15 @@ class Trainer:
                 loss.backward()
                 # 更新模型参数
                 self.optimizer.step()
-
                 # 累加本批次的损失
                 train_loss += loss.item()* bs
+
                 # 计算当前批次的准确率
                 preds = torch.argmax(outputs, dim=1)
                 correct = torch.sum(preds == labels.data)
                 total_correct += correct.item()
                 # 累加训练样本总数
-                total_samples += labels.size(0)
+                total_samples += bs
 
             # 学习率调整
             if self.lr_scheduler is not None:
@@ -290,11 +314,12 @@ class Trainer:
         if len(self.val_dataloader) == 0:
             print("Warning: Validation dataloader is empty.")
             return
+        val_count = len(self.val_dataloader)
 
         try:
             self.model.eval()
             with torch.no_grad():
-                for step, (b_x, b_y) in tqdm(enumerate(self.val_dataloader), total=len(self.val_dataloader), desc=f'Val {epoch}/{self.epochs}'):
+                for step, (b_x, b_y) in tqdm(enumerate(self.val_dataloader), total=val_count, desc=f'Val {epoch}/{self.epochs}'):
                     b_x = b_x.to(self.device)
                     b_y = b_y.to(self.device)
                     bs = b_y.size(0)
@@ -304,14 +329,20 @@ class Trainer:
                     # 计算损失，衡量模型预测与真实标签的差异
                     loss = self.criterion(outputs, b_y)
                     # 累加本批次的损失值，并乘以当前批次的样本数，便于后续计算平均损失
-                    val_loss += loss.item()*bs # * b_x.size(0)
+                    val_loss += loss.item()*bs
 
                     # 获取每个样本预测的最大值对应的类别标签
                     preds = torch.argmax(outputs, dim=1)
                     # 计算本批次预测正确的样本数，并累加
                     correct = torch.sum(preds == b_y.data)
                     total_correct += correct.item()
-                    total_samples += b_y.size(0)
+                    total_samples += bs
+
+                    # 更新混淆矩阵数据
+                    if len(b_y.shape) == 1:  # 分类问题
+                        print("混淆矩阵")
+                        for idx in range(len(b_y)):
+                            self.cnf_matrix[b_y[idx]][preds[idx]] += 1
 
                 # 计算并保存验证集的平均损失和准确率
                 val_loss /= total_samples
@@ -319,10 +350,7 @@ class Trainer:
                 self.val_loss_all.append(val_loss)  # 平均验证损失：总损失除以验证集样本总数
                 self.val_acc_all.append(val_acc)  # 平均验证准确率：正确预测数除以验证集样本总数
 
-                # 更新混淆矩阵数据
-                if len(b_y.shape) == 1:
-                    for idx in range(len(b_y)):
-                        self.cnf_matrix[b_y[idx]][preds[idx]] += 1
+
 
                 # 打印当前 epoch 的验证损失和准确率
                 print(f'Epoch {epoch} Val Loss: {val_loss:.4f} Val Acc: {val_acc:.4f}')
@@ -333,6 +361,7 @@ class Trainer:
             raise e
         finally:
             self.model.train()
+
 
     def plot(self):
                 # 使用pandas将训练过程的损失和准确率保存到DataFrame
@@ -359,8 +388,9 @@ class TrainerV1:
     def __init__(self,
                  model:nn.Module,
                  num_classes:int=2,
-                 train_loader:DataLoader=None,
-                 val_loader:DataLoader=None,
+                 train_dataloader:DataLoader=None,
+                 val_dataloader:DataLoader=None,
+                 test_dataloader: DataLoader = None,
                  optims:str='sgd',
                  criterion=nn.CrossEntropyLoss(),
                  # scheduler:None = None,
@@ -368,7 +398,8 @@ class TrainerV1:
                  num_epoch: int = 5,
                  device='cuda',
                  resume=None,
-                 output_dir='./output'):
+                 output_dir='./output',
+                 cls=True, **kwargs):
         """
         创建 Trainer 对象时，完成训练和验证过程的所有必要初始化工作
         model : 传入待训练的深度学习模型，本文暂时使用unet。
@@ -382,21 +413,36 @@ class TrainerV1:
         output_dir : 输出目录，用于存储训练日志、模型检查点等。
         """
 
-        self.train_loader:DataLoader = train_loader
-        self.val_loader = val_loader
+        self.device = device
+        self.save_dir = os.path.join(output_dir, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+        self.model = model.to(self.device)
+        self.resume = resume
+        self.model_name = None
+        self.num_classes = num_classes
+
         self.criterion = criterion
         self.optim = optims
         self.lr = lr
         self.num_epoch = num_epoch
-        self.device = device
-        self.num_classes = num_classes
-        self.resume = resume
-        self.model_name = None
-        self.save_dir = os.path.join(output_dir, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-        self.model = model.to(self.device)
         self.metrics = None
         self.optimizer = None
         self.lr_scheduler = None
+
+        self.train_loader = train_dataloader
+        self.val_loader = val_dataloader
+        if test_dataloader:
+            self.test_loader = test_dataloader
+        else:
+            self.test_loader = val_dataloader
+
+        # 用于记录训练和验证过程中的损失值
+        self.train_loss_all = []
+        self.val_loss_all = []
+        self.train_acc_all = []
+        self.val_acc_all = []
+        self.cnf_matrix = None # 分类问题
+        self.cls=cls
 
         self.init_settings()
 
@@ -408,6 +454,14 @@ class TrainerV1:
         设置日志记录系统，用于记录训练过程中的关键信息。
         初始化度量工具Metrics，用于评估模型在验证集上的表现。
         """
+
+        logger.info('init device ... ')
+        try:
+            self.device = torch.device(self.device)
+        except Exception as e:
+            print(e)
+            self.device = torch.device('cuda:0' if torch.cuda.is_available() else "cpu")
+
         if self.resume:
             self.load_model(self.resume)
             self.model_name = os.path.basename(self.resume)
@@ -423,6 +477,9 @@ class TrainerV1:
 
         logger.info('init optimizer ... ')
         self.optim_scheduler()
+
+        # 初始化混淆矩阵
+        self.cnf_matrix = np.zeros((self.num_classes,self.num_classes))
 
 
     def optim_scheduler(self):
@@ -475,14 +532,14 @@ class TrainerV1:
             self.model.train()
             train_loss = 0.0
             train_acc= 0.0
-
             total_correct = 0
             total_samples = 0
 
-            for i, batch in tqdm(enumerate(self.train_loader), total=train_count):
+            for batch_idx, batch in tqdm(enumerate(self.train_loader), total=train_count, desc='Training'):
                 images, labels = batch
                 images = images.to(self.device)
                 labels = labels.to(self.device)
+                bs = labels.size(0)
 
                 # 清零梯度
                 self.optimizer.zero_grad()
@@ -494,18 +551,20 @@ class TrainerV1:
                 loss.backward()
                 # 更新参数
                 self.optimizer.step()
-                train_loss += loss.item()
+                train_loss += loss.item()*bs
 
                 # 使用 torch.argmax 找到模型输出中预测的类别（最大概率的类别索引）
                 preds = torch.argmax(outputs, dim=1)
                 # 计算本批次预测正确的样本数，并累加
                 correct = torch.sum(preds == labels.data)
                 total_correct += correct.item()
-                total_samples += labels.size(0)
+                total_samples += bs
 
             self.lr_scheduler.step()
             train_loss /= total_samples
             train_acc = total_correct/total_samples
+            self.train_loss_all.append(train_loss)
+            self.train_acc_all.append(train_acc)
             logger.info(f"Train Loss: {train_loss:.4f}")
             logger.info(f"Train Acc: {train_acc:.4f}")
 
@@ -516,6 +575,11 @@ class TrainerV1:
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 self.save_model(f"epoch_{epoch + 1}_acc_{val_acc:.4f}.pth")
+        self.test()
+        self.plot_acc_loss(save_path=os.path.join(self.save_dir, 'acc_loss.png'))
+        # if self.cls:
+        #     self.plot_confusion_matrix(cm =self.cnf_matrix,
+        #                                classes= [i for i in range(self.num_classes)],)
 
     def evaluate(self):
         """
@@ -540,11 +604,12 @@ class TrainerV1:
 
         val_count = len(self.val_loader)
         with torch.no_grad():
-            logger.info("start evaluating ...")
-            for batch in tqdm(self.val_loader, total=val_count):
+            # logger.info("start evaluating ...")
+            for batch in tqdm(self.val_loader, total=val_count, desc='Evaluating'):
                 images, labels = batch
-                images = images.to(self.device)#.float()
-                labels = labels.to(self.device)#.long()
+                images = images.to(self.device)
+                labels = labels.to(self.device)
+                bs = labels.size(0)
 
                 outputs = self.model(images)
                 # 获取每个样本预测的最大值对应的类别标签
@@ -553,15 +618,17 @@ class TrainerV1:
                 # 更新混淆矩阵
                 self.metrics.sample_add(labels, preds)
                 loss = self.criterion(outputs, labels)
-                val_loss += loss.item()
+                val_loss += loss.item()*bs
 
                 # 计算本批次预测正确的样本数，并累加
                 correct = torch.sum(preds == labels.data)
                 total_correct += correct.item()
-                total_samples += labels.size(0)
+                total_samples += bs
 
         val_loss /= total_samples
         val_acc = total_correct/total_samples
+        self.val_loss_all.append(val_loss)
+        self.val_acc_all.append(val_acc)
         logger.info(f"Validation Loss: {val_loss:.4f}")
         logger.info(f"Validation Acc: {val_acc:.4f}")
 
@@ -572,6 +639,59 @@ class TrainerV1:
             logger.info(f"{key}: {value}")
 
         return results
+
+
+    def test(self):
+        """
+        测试模型。
+        """
+        self.model.eval()
+        test_loss_all = []
+        test_loss = 0.0
+        total_samples = 0
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(self.test_loader):
+                images, labels = batch
+                images = images.to(self.device)
+                labels = labels.to(self.device)
+                bs = labels.size(0)
+
+                # 前向传播
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
+                test_loss_all.append(loss.item())
+                test_loss += loss.item() * bs
+                total_samples += bs
+
+                labels = labels.cpu().numpy()
+                outputs = torch.argmax(outputs, dim=1).cpu().numpy()
+                # 更新混淆矩阵数据
+                if self.cls:  # 分类问题
+                    for idx in range(len(labels)):
+                        self.cnf_matrix[labels[idx]][outputs[idx]] += 1
+
+        test_loss /= total_samples
+        logger.info(f"Final Test Loss: {test_loss:.4f}")
+
+
+    def predict(self, im_data):
+        """
+        目标: 使用训练好的模型对给定的图像进行预测。
+        加载模型参数: 从指定的检查点文件中加载模型的参数，并将其移动到指定的设备上。
+        加载图像: 使用 cv2.imread() 函数加载图像，并将其转换为 PyTorch 张量。
+        预处理图像: 将图像转换为模型所需的输入格式，例如归一化、裁剪等。
+        前向传播: 将预处理后的图像输入模型，得到预测输出。
+        获取预测结果: 从预测输出中获取最大值对应的类别标签。
+        返回预测结果: 返回预测结果，即预测的类别标签。
+        """
+        im_data = torch.tensor(im_data).unsqueeze(0).to(self.device)
+        # im_data = torch.tensor(Image.open(img_path))
+        self.model.eval()
+        with torch.no_grad():
+            pred = self.model(im_data)
+            pred = torch.argmax(pred, dim=1)
+            return pred
+
 
     def save_model(self, filename):
         """
@@ -587,6 +707,7 @@ class TrainerV1:
         self.model_name = filename
         logger.info(f"Model saved to {model_path}")
 
+
     def load_model(self, checkpoint):
         """
         目标: 从指定的检查点文件加载模型参数，用于恢复训练或进行推理。
@@ -599,38 +720,76 @@ class TrainerV1:
         logger.info(f"Model loaded from {checkpoint}")
 
 
-def matplot_acc_loss(train_process):  # 函数用于绘制训练和验证的损失与准确率变化曲线
-    plt.figure(figsize=(12, 4))  # 创建一个宽12英寸、高4英寸的图形窗口，用于放置子图
- 
-    # 绘制训练和验证损失曲线
-    plt.subplot(1, 2, 1)  # 创建1行2列的子图布局，当前绘制第1个子图
-    plt.plot(train_process['epoch'], train_process.train_loss_all, 'ro-', label='Train Loss')  
-    # 绘制训练损失曲线，使用红色圆圈点标记 'ro-'。X轴是epoch，Y轴是train_loss_all
-    plt.plot(train_process['epoch'], train_process.val_loss_all, 'bs-', label='Val Loss')
-    # 绘制验证损失曲线，使用蓝色方形点标记 'bs-'。X轴是epoch，Y轴是val_loss_all
-    plt.xlabel('Epoch')  # 设置x轴的标签为'Epoch'
-    plt.ylabel('Loss')  # 设置y轴的标签为'Loss'
-    plt.title('Train and Validation Loss')  # 设置子图的标题为'训练和验证损失'
-    plt.legend()  # 显示图例，用于区分训练和验证的损失曲线
-    plt.grid(True)  # 启用网格线，增强图表的可读性
- 
-    # 绘制训练和验证准确率曲线
-    plt.subplot(1, 2, 2)  # 创建1行2列的子图布局，当前绘制第2个子图
-    plt.plot(train_process['epoch'], train_process.train_acc_all, 'ro-', label='Train Acc')  
-    # 绘制训练准确率曲线，使用红色圆圈点标记 'ro-'。X轴是epoch，Y轴是train_acc_all
-    plt.plot(train_process['epoch'], train_process.val_acc_all, 'bs-', label='Val Acc')  
-    # 绘制验证准确率曲线，使用蓝色方形点标记 'bs-'。X轴是epoch，Y轴是val_acc_all
-    plt.xlabel('Epoch')  # 设置x轴的标签为'Epoch'
-    plt.ylabel('Accuracy')  # 设置y轴的标签为'Accuracy'
-    plt.title('Train and Validation Accuracy')  # 设置子图的标题为'训练和验证准确率'
-    plt.legend()  # 显示图例，用于区分训练和验证的准确率曲线
-    plt.grid(True)  # 启用网格线，增强图表的可读性
- 
-    # 调整布局，防止子图的标题和轴标签重叠
-    plt.tight_layout()
- 
-    # 显示最终绘制的图形
-    plt.show()
+    def plot_acc_loss(self, save_path=None):
+        # 检查数据有效性
+        if not (self.train_loss_all and self.val_loss_all and self.train_acc_all and self.val_acc_all):
+            raise ValueError("One or more of the data lists is empty or None.")
+
+        plt.figure(figsize=(12, 4))
+
+        plt.subplot(1, 2, 1)
+        plt.plot(self.train_loss_all, 'ro-', label='Train Loss')
+        plt.plot(self.val_loss_all, 'bs-', label='Val Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Train and Validation Loss')
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(1, 2, 2)
+        plt.plot(self.train_acc_all, 'ro-', label='Train Acc')
+        plt.plot(self.val_acc_all, 'bs-', label='Val Acc')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.title('Train and Validation Accuracy')
+        plt.legend()
+        plt.grid(True)
+
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+        plt.close()
+
+    def plot_confusion_matrix(self, cm, classes,
+                              normalize=False,
+                              title='Confusion matrix'):
+        """
+        绘制混淆矩阵。
+
+        :param cm: 混淆矩阵
+        :param classes: 类别标签列表
+        :param normalize: 是否归一化混淆矩阵，默认为 False
+        :param title: 图表标题
+        :param cmap: 颜色映射，默认为 Blues
+        """
+        if normalize:
+            cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            print("Normalized confusion matrix")
+        else:
+            print('Confusion matrix, without normalization')
+
+        plt.imshow(cm, cmap='viridis') # , interpolation='nearest'
+        plt.title(title)
+        plt.colorbar()
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes, rotation=45)
+        plt.yticks(tick_marks, classes)
+
+        # fmt = '.2f' if normalize else 'd'
+        # thresh = cm.max() / 2.
+        # for i in range(cm.shape[0]):
+        #     for j in range(cm.shape[1]):
+        #         plt.text(j, i, format(cm[i, j], fmt),
+        #                  horizontalalignment="center",
+        #                  color="white" if cm[i, j] > thresh else "black")
+
+        plt.tight_layout()
+        plt.ylabel('True label')
+        plt.xlabel('Predicted label')
+        plt.show()
+        plt.close()
+
 
 
 if __name__ == '__main__':
@@ -652,18 +811,26 @@ if __name__ == '__main__':
     LeNet = LeNetV1()
 
     # 加载并处理训练和验证数据
-    train_dataloader, val_dataloader = train_val_data_process(root=FashionMNIST_dir,
-                                                              batch_size=batch_size,
-                                                              num_workers=num_workers)
+    train_dl, val_dl, test_dl = FashionMNIST_loader(root=FashionMNIST_dir, batch_size=batch_size,
+                                                           num_workers=num_workers)
 
+    x, y = next(iter(test_dl))
+    print(len(y.shape))
+    print(x.shape)
 
-    criterion = nn.CrossEntropyLoss() # torch.nn.modules.loss.CrossEntropyLoss
+    # criterion = nn.CrossEntropyLoss() # torch.nn.modules.loss.CrossEntropyLoss
 
-    aa = Trainer(LeNet,
-                 num_classes=10,
-                 train_dl=train_dataloader,
-                 val_dl=val_dataloader,
-                 device=device_flag,
-                 num_epoch=epochs,
-                 optims='adam')
-    aa.fit()
+    aa = TrainerV1(LeNet,
+                   num_classes=10,
+                   train_dataloader=train_dl,
+                   val_dataloader=val_dl,
+                   test_dataloader = test_dl,
+                   device=device_flag,
+                   num_epoch=epochs,
+                   optims='adam',
+                   resume='output/20240930_105131/epoch_3_acc_0.7721.pth',
+                   cls=True)
+    # aa.fit()
+
+    res = aa.predict(x[0,:,:,:])
+    print(res, y[0])
