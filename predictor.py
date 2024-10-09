@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # @Time    : 2024/8/31 22:17
-# @Author  : xuxing
+# @Author  : comet
 # @Site    :
 # @File    : predictor.py
 # @Software: PyCharm
@@ -10,7 +10,7 @@ from PIL import Image
 import torch
 
 from config.load_config import get_train_config
-from datasets.transform import transform
+# from datasets.transform import transform
 from tqdm import tqdm
 import numpy as np
 
@@ -19,7 +19,7 @@ class Predictor:
     def __init__(self,
                  weight,
                  yaml_fp='./config/model.yaml',
-                 transform=transform['test'],
+                 transform=None,
                  device='cuda'):
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         self.model = get_train_config(yaml_fp).model
@@ -35,7 +35,8 @@ class Predictor:
 
     def predict(self, image_path):
         image = np.array(Image.open(image_path))
-        image = self.transform(image=image)['image'].unsqueeze(0).to(self.device)
+        if self.transform:
+            image = self.transform(image=image)['image'].unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             output = self.model(image)
@@ -63,6 +64,6 @@ if __name__ == '__main__':
     test_path = './data/WHDLD/outputs/test/images'
     pred_path = './data/WHDLD/outputs/test/preds'
     model_path = './outputs/20240902_102844/epoch_2_acc_0.7091_miou_0.5493.pth'
-    transform = transform['test']
-    predictor = Predictor(weight=model_path)
+
+    predictor = Predictor(weight=model_path, transform=None)
     predictor.predict_folder(test_path, pred_path)

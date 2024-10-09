@@ -521,7 +521,15 @@ class Trainer(nn.Module):
             # val_miou = evaluate_results['total_iou']
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                self.save_model(f"epoch_{epoch + 1}_valacc_{val_acc:.4f}.pth")
+
+                checkpoint = {
+                    'val_acc': best_val_acc,
+                    'epoch': epoch,
+                    'model': self.model.state_dict(),
+                    'optimizer': self.optimizer.state_dict(),
+                    'lr_schedule': self.scheduler.state_dict()}
+                self.save_model(f"epoch_{epoch + 1}_valacc_{val_acc:.4f}.pth",checkpoint=checkpoint)
+
         self.test()
         self.plot_acc_loss(save_path=os.path.join(self.save_dir, 'acc_loss.png'))
         # if self.cls:
@@ -554,7 +562,6 @@ class Trainer(nn.Module):
         with torch.no_grad():
             # logger.info("start evaluating ...")
             for batch in tqdm(self.val_loader, total=val_count, desc='Evaluating'):
-                # images, labels = batch
                 inputs, targets = batch
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
@@ -600,7 +607,8 @@ class Trainer(nn.Module):
         test_loss = 0.0
         total_samples = 0
         with torch.no_grad():
-            for batch_idx, batch in enumerate(self.test_loader):
+            # for batch_idx, batch in enumerate(self.test_loader):
+            for batch in tqdm(self.test_loader, total=len(self.test_loader), desc='Testing'):
                 inputs, targets = batch
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
@@ -641,7 +649,7 @@ class Trainer(nn.Module):
             pred = torch.argmax(pred, dim=1)
             return pred
 
-    def save_model(self, filename):
+    def save_model(self, filename,checkpoint=None):
         """
         目标: 在验证集上取得最佳表现时，将当前的模型参数保存为一个检查点文件。
         移除旧模型文件: 如果当前已经存在一个模型文件，会先删除旧的模型文件。
@@ -651,7 +659,10 @@ class Trainer(nn.Module):
         if self.model_name and os.path.exists(os.path.join(self.save_dir, self.model_name)):
             os.remove(os.path.join(self.save_dir, self.model_name))
         model_path = os.path.join(self.save_dir, filename)
-        torch.save(self.model.state_dict(), model_path)
+        if checkpoint:
+            torch.save(checkpoint, model_path)
+        else:
+            torch.save(self.model.state_dict(), model_path)
         self.model_name = filename
         logger.info(f"Model saved to {model_path}")
 
@@ -662,8 +673,19 @@ class Trainer(nn.Module):
         设置设备: 将加载后的模型移动到指定的设备上（如 GPU），以便进行后续的训练或验证。
         记录模型加载: 记录模型加载的路径，便于追踪和调试。
         """
-        self.model.load_state_dict(torch.load(checkpoint, weights_only=True))
-        self.model.to(self.device)
+        # self.model.load_state_dict(torch.load(checkpoint, weights_only=True))
+        # self.model.to(self.device)
+
+        try:
+            checkpoint = torch.load(checkpoint)
+            # start_epoch = checkpoint['epoch']
+            self.model.load_state_dict(checkpoint['model'], strict=False)
+            self.model.to(self.device)
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            self.scheduler.load_state_dict(checkpoint['lr_schedule'])
+        except Exception as e:
+            logger.error(f"Warning: Error loading model from {checkpoint}: {e}")
+
         logger.info(f"Model loaded from {checkpoint}")
 
     def plot_acc_loss(self, save_path=None):

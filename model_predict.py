@@ -4,14 +4,15 @@ from torchvision import transforms
 from torchvision.datasets import FashionMNIST, MNIST
 from models.mynet.LeNet import LeNet
 
+transform = transforms.Compose([
+    # transforms.Resize(size=224),  # 将输入的28x28图像调整为224x224（用于较大的CNN模型）
+    transforms.ToTensor(),  # 将图像转换为PyTorch的Tensor格式
+    transforms.Normalize((0.5,), (0.5,))  # 可以选择添加标准化，像素值范围[-1, 1]
+])
 
 # 定义处理测试数据的函数
 def val_data_process():
-    transform = transforms.Compose([
-        # transforms.Resize(size=224),  # 将输入的28x28图像调整为224x224（用于较大的CNN模型）
-        transforms.ToTensor(),  # 将图像转换为PyTorch的Tensor格式
-        transforms.Normalize((0.5,), (0.5,))  # 可以选择添加标准化，像素值范围[-1, 1]
-    ])
+
     test_data = MNIST(
         root='./data',  # 指定数据集存储路径，如果不存在会自动下载并创建
         train=False,  # 设置为False表示加载测试集
@@ -53,5 +54,5 @@ def model_process(model, test_dataloader):
 if __name__=="__main__":
     model = LeNet() # 实例化模型
     model.load_state_dict(torch.load('checkpoints/lenet_mnist_model.pth',weights_only=True)) # 加载保存的最佳模型权重
-    test_dataloader = val_data_process()
-    model_process(model, test_dataloader)
+    test_dl = val_data_process()
+    model_process(model, test_dl)

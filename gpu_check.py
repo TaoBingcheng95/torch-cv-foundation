@@ -16,8 +16,8 @@ def check_cuda_availability():
     except Exception as e:
         print(f"Error: {e}")
 
-print(torch.__version__)
-print(torch.version.cuda)
-print(torch.backends.cudnn.version())
+print('torch version : ', torch.__version__)
+print('cuda version : ', torch.version.cuda)
+print('cudnn version : ', torch.backends.cudnn.version())
 
 check_cuda_availability()
