@@ -5,12 +5,11 @@
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
 import torch.nn.functional as F
 from torch import Tensor
 from torch.nn.modules import Module
 
-# from ..datasets import NonGeoDataset
+from ..datasets import NonGeoDataset
 
 
 class RCF(Module):
@@ -44,7 +43,7 @@ class RCF(Module):
         bias: float = -1.0,
         seed: int | None = None,
         mode: str = 'gaussian',
-        dataset: Dataset | None = None,
+        dataset: NonGeoDataset | None = None,
     ) -> None:
         """Initializes the RCF model.
 

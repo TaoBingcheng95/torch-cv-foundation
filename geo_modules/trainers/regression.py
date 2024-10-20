@@ -16,8 +16,8 @@ from torch import Tensor
 from torchmetrics import MeanAbsoluteError, MeanSquaredError, MetricCollection
 from torchvision.models._api import WeightsEnum
 
-from geo_modules.datasets import RGBBandsMissingError, unbind_samples
-from models.components import FCN, get_weight
+from ..datasets import RGBBandsMissingError, unbind_samples
+from ..models import FCN, get_weight
 from . import utils
 from .base import BaseTask
 
@@ -77,7 +77,7 @@ class RegressionTask(BaseTask):
            *lr* and *patience*.
         """
         self.weights = weights
-        super().__init__(ignore='weights')
+        super().__init__()
 
     def configure_models(self) -> None:
         """Initialize the model."""

@@ -15,8 +15,8 @@ from torchmetrics import MetricCollection
 from torchmetrics.classification import MulticlassAccuracy, MulticlassJaccardIndex
 from torchvision.models._api import WeightsEnum
 
-from geo_modules.datasets import RGBBandsMissingError, unbind_samples
-from models.components import FCN, get_weight
+from ..datasets import RGBBandsMissingError, unbind_samples
+from ..models import FCN, get_weight
 from . import utils
 from .base import BaseTask
 
@@ -88,7 +88,7 @@ class SemanticSegmentationTask(BaseTask):
            The *ignore_index* parameter now works for jaccard loss.
         """
         self.weights = weights
-        super().__init__(ignore='weights')
+        super().__init__()
 
     def configure_models(self) -> None:
         """Initialize the model.

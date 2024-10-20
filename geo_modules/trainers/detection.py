@@ -19,7 +19,7 @@ from torchvision.models.detection.retinanet import RetinaNetHead
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.ops import MultiScaleRoIAlign, feature_pyramid_network, misc
 
-from geo_modules.datasets import RGBBandsMissingError, unbind_samples
+from ..datasets import RGBBandsMissingError, unbind_samples
 from .base import BaseTask
 
 BACKBONE_LAT_DIM_MAP = {
@@ -53,6 +53,7 @@ class ObjectDetectionTask(BaseTask):
     .. versionadded:: 0.4
     """
 
+    ignore = None
     monitor = 'val_map'
     mode = 'max'
 
