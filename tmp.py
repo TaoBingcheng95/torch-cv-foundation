@@ -1,28 +1,19 @@
-# https://blog.itpub.net/18841117/viewspace-3015295/
-
 import os
-import sys
-import time
+from pathlib import Path
 import datetime
-import copy
-
-from tqdm import tqdm
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 from loguru import logger
-# import logging
+import numpy as np
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import torch
 from torch import nn, optim
+from torch.optim import lr_scheduler
 from torch.utils.data import Dataset, DataLoader
 
-
+from dataset.mnist_datamodule import MNISTDataModule
+from models.components import SimpleDenseNet
 from metrics import Metrics
-
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-# logging.basicConfig(level=logging.INFO)
-# logger = logging.getLogger(__name__)
 
 def setup_logging(output_dir):
     """
@@ -38,276 +29,7 @@ def setup_logging(output_dir):
     logger.info(f"Logging is set up. Logs are being saved to {log_file_path}.")
 
 
-class Trainer_bak:
-    def __init__(self, model: nn.Module,
-                 train_dl: DataLoader = None,
-                 val_dl: DataLoader = None,
-                 test_dl: DataLoader = None,
-                 device: str = 'cuda:0',
-                 num_classes: int = 10,
-                 criterion: nn.Module = nn.CrossEntropyLoss(),
-                 lr: float = 0.001,
-                 num_epoch: int = 5,
-                 optims: str = 'sgd',
-                 init: bool = True,
-                 resume: str = False,
-                 compile: bool = False,
-                 save_dir: str = 'logs', **kwargs):
-        super().__init__()
-
-        def init_xavier(m):  # 参数初始化
-            # if type(m) == nn.Linear or type(m) == nn.Conv2d:
-            if type(m) == nn.Linear:
-                nn.init.xavier_normal_(m.weight)
-
-        if init:
-            model.apply(init_xavier)
-
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-
-        self.model = model
-        self.resume = resume
-        self.model_name = None
-        self.num_classes = num_classes
-        self.save_dir = save_dir
-        self.best_model_wts = None
-        self.compile = compile
-
-        self.train_dataloader = train_dl
-        self.val_dataloader = val_dl
-        self.test_dataloader = test_dl
-
-        # 定义损失函数
-        # CrossEntropyLoss 是用于多分类问题的损失函数，特别适用于分类任务。
-        self.criterion = criterion
-        self.epochs = num_epoch
-        self.optims = optims
-        self.optimizer = None
-        self.lr = lr
-        self.lr_scheduler = None
-        # self.optim_scheduler()
-
-        # 用于记录训练和验证过程中的损失值
-        self.train_loss_all = []
-        self.val_loss_all = []
-        self.train_acc_all = []
-        self.val_acc_all = []
-        self.cnf_matrix = None  # 分类问题
-
-        self.init_settings()
-
-    def init_settings(self):
-        """
-        加载之前训练的模型（如有指定恢复路径）。
-        初始化输出目录，用于存储训练日志和模型文件。
-        设置日志记录系统，用于记录训练过程中的关键信息。
-        初始化度量工具Metrics，用于评估模型在验证集上的表现。
-        """
-        if self.resume:
-            self.model.load_state_dict(torch.load(self.resume, weights_only=True))
-            self.model_name = os.path.basename(self.resume)
-        self.model = self.model.to(self.device)
-        # 保存模型的最佳权重, 使用 copy.deepcopy 复制模型的当前权重，以便在后面保存最优模型时使用。
-        self.best_model_wts = copy.deepcopy(self.model.state_dict())
-
-        # logger.info('init output dirs ... ')
-        os.makedirs(os.path.join(self.save_dir, datetime.datetime.now().strftime("%Y%m%d_%H%M%S")),
-                    exist_ok=True)
-
-        # logger.info('init loggings ... ')
-        # setup_logging(self.save_dir)
-
-        # logger.info('init metrics ... ')
-        self.metrics = Metrics(self.num_classes, self.device)
-
-        # logger.info('init optimizer ... ')
-        self.optim_scheduler()
-        # 初始化混淆矩阵
-        self.cnf_matrix = np.zeros((self.num_classes, self.num_classes))
-
-        if self.compile:
-            # 定义使用的loss和optimizer，这里支持自定义
-            self.model.compile(
-                loss=nn.CrossEntropyLoss(),
-                optimizer=optim.Adam(self.model.parameters(), lr=2e-5),
-                scheduler=None,
-                # metrics=['accuracy']
-            )
-
-    def optim_scheduler(self):
-        """
-        定义优化器
-        """
-        if self.optims == 'sgd':
-            optimizer = torch.optim.SGD((param for param in self.model.parameters() if param.requires_grad),
-                                        lr=self.lr,
-                                        weight_decay=0)
-        elif self.optims == 'adam':
-            optimizer = torch.optim.Adam((param for param in self.model.parameters() if param.requires_grad),
-                                         lr=self.lr,
-                                         weight_decay=0)
-        elif self.optims == 'adamW':
-            optimizer = torch.optim.AdamW((param for param in self.model.parameters() if param.requires_grad),
-                                          lr=self.lr,
-                                          weight_decay=0)
-        else:
-            optimizer = torch.optim.SGD((param for param in self.model.parameters() if param.requires_grad),
-                                        lr=self.lr,
-                                        weight_decay=0)
-        self.optimizer = optimizer
-        self.lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
-
-    def fit(self):
-        # 初始化变量以跟踪最佳准确率
-        best_acc = 0.0
-        best_ckpt = None
-        # 训练数据的处理、损失计算、反向传播、参数更新
-        for epoch in range(self.epochs):
-            self.train_step(epoch)
-            self.val_step(epoch)
-            if self.val_acc_all[-1] > best_acc:  # 如果当前epoch的验证准确率大于历史最佳准确率
-                best_acc = self.val_acc_all[-1]  # 更新最佳验证准确率
-                # 深拷贝当前模型的参数权重，保存最佳模型
-                self.best_model_wts = copy.deepcopy(self.model.state_dict())
-                # 加载最佳模型权重，将模型参数恢复为训练期间保存的最佳权重
-                self.model.load_state_dict(self.best_model_wts)
-
-                # 保存最佳模型的权重到指定路径
-                # 注意：torch.save() 的参数应该是模型的 `state_dict()`，而不是 `load_state_dict()` 的返回值
-                try:
-                    if best_ckpt is not None and os.path.exists(best_ckpt):
-                        os.remove(best_ckpt)
-                except Exception as e:
-                    print(f"删除旧模型时发生错误：{e}")
-
-                best_ckpt = os.path.join(self.save_dir,
-                                         f'epoch_{epoch}_valacc_{best_acc:.3}.pth')
-                try:
-                    torch.save(self.model.state_dict(), best_ckpt)
-                    print(f"已保存最佳模型到 {best_ckpt}")
-                except Exception as e:
-                    print(f"保存模型时发生错误：{e}")
-
-    def train_step(self, epoch):
-        # 初始化每个epoch的累积损失和正确预测数
-        train_loss = 0.0  # 记录训练损失
-        total_correct = 0.0
-        # 初始化样本数量
-        total_samples = 0
-        self.model.train()
-        train_count = len(self.train_dataloader)
-        try:
-            for i, batch in tqdm(enumerate(self.train_dataloader), total=train_count,
-                                 desc=f'Train {epoch}/{self.epochs}'):
-                images, labels = batch
-                images = images.to(self.device)
-                labels = labels.to(self.device)
-                bs = labels.size(0)
-
-                # 反向传播前将梯度清零
-                self.optimizer.zero_grad()
-                # 前向传播
-                outputs = self.model(images)
-                # 计算损失
-                loss = self.criterion(outputs, labels)
-                # 反向传播，计算梯度
-                loss.backward()
-                # 更新模型参数
-                self.optimizer.step()
-                # 累加本批次的损失
-                train_loss += loss.item() * bs
-
-                # 计算当前批次的准确率
-                preds = torch.argmax(outputs, dim=1)
-                correct = torch.sum(preds == labels.data)
-                total_correct += correct.item()
-                # 累加训练样本总数
-                total_samples += bs
-
-            # 学习率调整
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
-            # 平均训练损失：总损失除以样本总数
-            train_loss /= total_samples
-            # 平均训练准确率：正确预测数除以样本总数
-            train_acc = total_correct / total_samples
-            self.train_loss_all.append(train_loss)
-            self.train_acc_all.append(train_acc)
-            # 打印当前 epoch 的训练损失和准确率，打印列表的最后一个值（即当前epoch的结果）
-            print(f'Epoch {epoch}/{self.epochs} Train Loss: {train_loss:.4f} Train Acc: {train_acc:.4f}')
-        except Exception as e:
-            print(f"An error occurred during training: {e}")
-            # logging.error(f"An error occurred during training: {e}", exc_info=True)
-
-    def val_step(self, epoch):
-        val_loss = 0.0
-        total_correct = 0
-        total_samples = 0
-
-        if len(self.val_dataloader) == 0:
-            print("Warning: Validation dataloader is empty.")
-            return
-        val_count = len(self.val_dataloader)
-
-        try:
-            self.model.eval()
-            with torch.no_grad():
-                for step, (b_x, b_y) in tqdm(enumerate(self.val_dataloader), total=val_count,
-                                             desc=f'Val {epoch}/{self.epochs}'):
-                    b_x = b_x.to(self.device)
-                    b_y = b_y.to(self.device)
-                    bs = b_y.size(0)
-
-                    # 前向传播，获取模型对验证集数据的预测结果
-                    outputs = self.model(b_x)
-                    # 计算损失，衡量模型预测与真实标签的差异
-                    loss = self.criterion(outputs, b_y)
-                    # 累加本批次的损失值，并乘以当前批次的样本数，便于后续计算平均损失
-                    val_loss += loss.item() * bs
-
-                    # 获取每个样本预测的最大值对应的类别标签
-                    preds = torch.argmax(outputs, dim=1)
-                    # 计算本批次预测正确的样本数，并累加
-                    correct = torch.sum(preds == b_y.data)
-                    total_correct += correct.item()
-                    total_samples += bs
-
-                    # 更新混淆矩阵数据
-                    if len(b_y.shape) == 1:  # 分类问题
-                        print("混淆矩阵")
-                        for idx in range(len(b_y)):
-                            self.cnf_matrix[b_y[idx]][preds[idx]] += 1
-
-                # 计算并保存验证集的平均损失和准确率
-                val_loss /= total_samples
-                val_acc = total_correct / total_samples
-                self.val_loss_all.append(val_loss)  # 平均验证损失：总损失除以验证集样本总数
-                self.val_acc_all.append(val_acc)  # 平均验证准确率：正确预测数除以验证集样本总数
-
-                # 打印当前 epoch 的验证损失和准确率
-                print(f'Epoch {epoch} Val Loss: {val_loss:.4f} Val Acc: {val_acc:.4f}')
-
-        except Exception as e:
-            self.model.train()
-            logger.error(f"Error during validation: {e}")
-            raise e
-        finally:
-            self.model.train()
-
-    def plot(self):
-        # 使用pandas将训练过程的损失和准确率保存到DataFrame
-        # 方便后续分析和可视化
-        train_process = pd.DataFrame(
-            data={'epoch': range(self.epochs),  # epoch的序号
-                  'train_loss_all': self.train_loss_all,  # 每个epoch的训练损失
-                  "val_loss_all": self.val_loss_all,  # 每个epoch的验证损失
-                  "train_acc_all": self.train_acc_all,  # 每个epoch的训练准确率
-                  "val_acc_all": self.val_acc_all,  # 每个epoch的验证准确率
-                  }
-        )
-
-
-class Trainer(nn.Module):
+class SimpleTrainer(nn.Module):
     """
     __init__ : 输入并定义dataloader、model、optimizer、loss function、lr scheduler
     init_settings : 创建日志模型保存目录、初始化评价指标类
@@ -316,20 +38,26 @@ class Trainer(nn.Module):
     save_model : 保存模型参数
     load_model : 加载模型参数
     """
-
     def __init__(self,
                  model: nn.Module=None,
+                 device='cuda',
+                 resume=None,
                  num_classes: int = 2,
+
                  train_dataloader: DataLoader = None,
                  val_dataloader: DataLoader = None,
                  test_dataloader: DataLoader = None,
-                 optims: str = 'sgd',
+
+                 optimizer_type: str = 'adam',
+                 scheduler_type: str = 'steplr',
+                 lr: float = 0.001, # learning_rate
+                 step_size:int=10,
+                 gamma:float=0.1,
+
                  criterion=nn.CrossEntropyLoss(),
-                 # scheduler:None = None,
-                 lr: float = 0.001,
+
                  epochs: int = 5,
-                 device='cuda',
-                 resume=None,
+
                  output_dir='./output',
                  cls=True,
                  compile = False, **kwargs):
@@ -350,18 +78,23 @@ class Trainer(nn.Module):
         self.device = device
         self.save_dir = os.path.join(output_dir, datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
 
-        self.model = model.to(self.device)
+        self.model = model
         self.resume = resume
         self.model_name = None
         self.num_classes = num_classes
 
+        self.optimizer_type:str = optimizer_type
+        self.scheduler_type:str = scheduler_type
+        self.lr:float = lr
+        self.step_size:int=step_size
+        self.gamma:float=gamma
+        self.optimizer= None # optim.Optimizer
+        self.scheduler = None # lr_scheduler.LRScheduler
+
         self.criterion = criterion
-        self.optim = optims
-        self.lr = lr
+
         self.epochs = epochs
         self.metrics = None
-        self.optimizer = None
-        self.lr_scheduler = None
 
         self.train_loader = train_dataloader
         self.val_loader = val_dataloader
@@ -396,6 +129,7 @@ class Trainer(nn.Module):
         except Exception as e:
             print(e)
             self.device = torch.device('cuda:0' if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
 
         if self.resume:
             self.load_model(self.resume)
@@ -413,7 +147,7 @@ class Trainer(nn.Module):
         self.cnf_matrix = np.zeros((self.num_classes, self.num_classes))
 
         logger.info('init optimizer ... ')
-        self.optim_scheduler()
+        self.init_optim_scheduler()
 
         logger.info('model compile... ')
         if self.compile:
@@ -421,32 +155,46 @@ class Trainer(nn.Module):
             self.model.compile(
                 loss=self.criterion,
                 optimizer=self.optimizer,
-                scheduler=self.lr_scheduler, # None
+                scheduler=self.scheduler, # None
                 # metrics=['accuracy']
             )
 
-    def optim_scheduler(self):
-        """
-        定义优化器
-        """
-        if self.optim == 'sgd':
-            optimizer = optim.SGD((param for param in self.model.parameters() if param.requires_grad),
-                                  lr=self.lr,
-                                  weight_decay=0)
-        elif self.optim == 'adam':
-            optimizer = optim.Adam((param for param in self.model.parameters() if param.requires_grad),
-                                   lr=self.lr,
-                                   weight_decay=0)
+    def init_optim_scheduler(self):
+        # 使用字典映射简化优化器选择逻辑
+        # optimizer_map = {
+        #     'sgd': optim.SGD,
+        #     'adam': optim.Adam,
+        #     'adamW': optim.AdamW
+        # }
+        # optimizer_class = optimizer_map.get(self.optimizer_type.lower(), optim.SGD)
+        # Initialize optimizer
+        if self.optimizer_type.lower() == 'adam':
+            # self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            self.optimizer = optim.Adam((param for param in self.model.parameters() if param.requires_grad),
+                                        lr=self.lr,
+                                        weight_decay=0)
+        elif self.optimizer_type.lower() == 'sgd':
+            self.optimizer = optim.SGD((param for param in self.model.parameters() if param.requires_grad),
+                                       lr=self.lr, # momentum = 0.9,
+                                       weight_decay=0)
         elif self.optim == 'adamW':
-            optimizer = optim.AdamW((param for param in self.model.parameters() if param.requires_grad),
-                                    lr=self.lr,
-                                    weight_decay=0)
+            self.optimizer = optim.AdamW((param for param in self.model.parameters() if param.requires_grad),
+                                         lr=self.lr,
+                                         weight_decay=0)
         else:
-            optimizer = optim.SGD((param for param in self.model.parameters() if param.requires_grad),
-                                  lr=self.lr,
-                                  weight_decay=0)
-        self.optimizer = optimizer
-        self.lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
+            raise ValueError(f"Unsupported optimizer type: {self.optimizer_type}")
+
+        # Initialize scheduler
+        if self.scheduler_type.lower() == 'steplr':
+            self.scheduler = lr_scheduler.StepLR(self.optimizer,
+                                                 step_size=self.step_size,
+                                                 gamma=self.gamma)
+        elif self.scheduler_type.lower() == 'exponentiallr':
+            self.scheduler = lr_scheduler.ExponentialLR(self.optimizer,
+                                                        gamma=self.gamma)
+        else:
+            raise ValueError(f"Unsupported scheduler type: {self.scheduler_type}")
+
 
     def fit(self):
         """
@@ -505,7 +253,7 @@ class Trainer(nn.Module):
                 # total_correct += correct.item()
                 total_samples += bs
 
-            self.lr_scheduler.step()
+            self.scheduler.step()
 
             train_loss /= total_samples
             self.train_loss_all.append(train_loss)
@@ -528,7 +276,8 @@ class Trainer(nn.Module):
                     'model': self.model.state_dict(),
                     'optimizer': self.optimizer.state_dict(),
                     'lr_schedule': self.scheduler.state_dict()}
-                self.save_model(f"epoch_{epoch + 1}_valacc_{val_acc:.4f}.pth",checkpoint=checkpoint)
+                self.save_model(f"epoch_{epoch + 1}_valacc_{val_acc:.4f}.pth",
+                                checkpoint=checkpoint)
 
         self.test()
         self.plot_acc_loss(save_path=os.path.join(self.save_dir, 'acc_loss.png'))
@@ -759,45 +508,45 @@ class Trainer(nn.Module):
         plt.close()
 
 
-# if __name__ == '__main__':
-#
-#     device_flag = 'cuda:0'
-#     # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-#     FashionMNIST_dir = './data'
-#
-#     # 超参数
-#     batch_size = 32
-#     # 对于Windows用户，这里应设置为0，否则会出现多线程错误
-#     if sys.platform.startswith('win'):
-#         num_workers = 0
-#     else:
-#         num_workers = 4
-#     lr = 1e-4
-#     epochs = 3
-#
-#     LeNet = LeNetV1()
-#
-#     # 加载并处理训练和验证数据
-#     train_dl, val_dl, test_dl = FashionMNIST_loader(root=FashionMNIST_dir, batch_size=batch_size,
-#                                                     num_workers=num_workers)
-#
-#     x, y = next(iter(test_dl))
-#     print(len(y.shape))
-#     print(x.shape)
-#
-#     # criterion = nn.CrossEntropyLoss() # torch.nn.modules.loss.CrossEntropyLoss
-#
-#     aa = TrainerV1(LeNet,
-#                    num_classes=10,
-#                    train_dataloader=train_dl,
-#                    val_dataloader=val_dl,
-#                    test_dataloader=test_dl,
-#                    device=device_flag,
-#                    num_epoch=epochs,
-#                    optims='adam',
-#                    resume='output/20240930_105131/epoch_3_acc_0.7721.pth',
-#                    cls=True)
-#     # aa.fit()
-#
-#     res = aa.predict(x[0, :, :, :])
-#     print(res, y[0])
+
+
+if __name__ == '__main__':
+
+    dm = MNISTDataModule(data_dir='./data', batch_size=8)
+    dm.prepare_data()
+    dm.setup()
+    train_dl = dm.train_dataloader()
+    val_dl = dm.val_dataloader()
+    test_dl = dm.test_dataloader()
+    # print(len(train_dl),len(val_dl),len(test_dl))
+    x, y = next(iter(train_dl))
+    # print(x.shape)
+
+    model = SimpleDenseNet(output_size=dm.num_classes)
+
+    optimizer = torch.optim.Adam(model.parameters(),
+                                 lr=1e-3,
+                                 weight_decay=0.0)
+    # scheduler = lr_scheduler.ReduceLROnPlateau(optimizer,
+    #                                            mode='min',
+    #                                            patience=10,
+    #                                            factor=0.1)
+
+
+    # compile model for faster training with pytorch 2.0
+    compile= False
+
+    tt = SimpleTrainer(model=model,
+                       device='cuda:0',
+                       train_dataloader=train_dl,
+                       val_dataloader=val_dl,
+                       test_dataloader=test_dl,
+                       num_classes=10,
+                       optimizer_type='sgd',
+                       epochs=10
+                       )
+
+
+
+    tt.fit()
+

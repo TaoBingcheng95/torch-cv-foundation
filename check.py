@@ -5,7 +5,7 @@ import sys
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
-from dataset.tianchi_building import TianchiDataset
+from dataset.tianchi import TianchiDataset
 from models.mynet.Unet import UNetV1
 
 if __name__ == '__main__':

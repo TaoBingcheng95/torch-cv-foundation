@@ -39,6 +39,10 @@ class FashionMNISTLoader:
         else:
             self.val_ds = self.test_ds
 
+        self.train_loader = None
+        self.val_loader = None
+        self.test_loader = None
+
     def loader(self, batch_size=32):
 
         self.train_loader = DataLoader(
@@ -65,8 +69,6 @@ class FashionMNISTLoader:
         axis.imshow(x.permute(1, 2, 0), cmap='viridis')
         axis.set_title(self.idx_to_class[y])
         plt.show()
-
-
 
 
 class CIFAR10Loader:

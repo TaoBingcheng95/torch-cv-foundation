@@ -21,7 +21,7 @@ from torch import nn, optim
 from torch.utils.data import Dataset, DataLoader, random_split
 from torchvision import datasets, transforms
 from torchvision.datasets import FashionMNIST
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 from models.mynet.LeNet import LeNetV1
 from trainers import Trainer
@@ -96,7 +96,6 @@ def FashionMNIST_loader(root='./data', val_ratio=0.4, batch_size=32, num_workers
 if __name__ == '__main__':
 
     device_flag = 'cuda:0'
-    # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     FashionMNIST_dir = './data'
 
     # 超参数

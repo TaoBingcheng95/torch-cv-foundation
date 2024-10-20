@@ -7,7 +7,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from pprint import pprint
 
-from dataset.tianchi_building import TianchiDataset
+from dataset.tianchi import TianchiDataset
 from trainers.pt_trainer import Trainer
 
 # from config.load_config import TrainConfig
@@ -16,7 +16,7 @@ from models.mynet.Unet import UNetV1
 # from utils import parse_args, setup_logging
 # from tqdm import tqdm
 # from datetime import datetime
-# from metrics import Metrics
+# from metrics import metrics
 
 
 if __name__ == '__main__':
