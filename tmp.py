@@ -534,7 +534,7 @@ if __name__ == '__main__':
 
 
     # compile model for faster training with pytorch 2.0
-    compile= False
+    compile= True
 
     tt = SimpleTrainer(model=model,
                        device='cuda:0',
@@ -543,10 +543,8 @@ if __name__ == '__main__':
                        test_dataloader=test_dl,
                        num_classes=10,
                        optimizer_type='sgd',
-                       epochs=10
+                       epochs=10,
+                       compile=compile
                        )
-
-
-
     tt.fit()
 

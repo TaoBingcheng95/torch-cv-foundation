@@ -12,7 +12,7 @@ from .moco import MoCoTask
 from .regression import PixelwiseRegressionTask, RegressionTask
 from .segmentation import SemanticSegmentationTask
 from .simclr import SimCLRTask
-from .pt_trainer import Trainer
+from .basetrainer import Trainer
 
 __all__ = (
     # Supervised

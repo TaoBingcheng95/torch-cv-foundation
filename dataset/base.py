@@ -5,9 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 from torch.utils.data import Dataset
+from torchvision.datasets import ImageFolder
 
 
-class BaseDataset(Dataset, ABC):
+class BaseSegmentationDataset(Dataset, ABC):
     def __init__(self, root=None, img_folder='image',  label_folder='label',
                  transform=None,
                  suffix='.jpg',
@@ -54,3 +55,18 @@ class BaseDataset(Dataset, ABC):
             plt.show()
         finally:
             plt.close()
+
+class BaseClassificationDataset:
+    def __init__(self, data_dir, transform, batch_size):
+        self.data_dir = data_dir
+        self.transform = transform
+        self.batch_size = batch_size
+
+    def get_dataloader(self):
+        dataset = ImageFolder(root=self.data_dir,
+                                       transform=self.transform, )
+        # dataloader = DataLoader(dataset,
+        #                           batch_size=self.batch_size,
+        #                           shuffle=True)
+        return dataset
+

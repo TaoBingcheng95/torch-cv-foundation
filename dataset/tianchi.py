@@ -5,10 +5,10 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from dataset import BaseDataset
+from dataset import BaseSegmentationDataset
 
 
-class TianchiDataset(BaseDataset):
+class TianchiDataset(BaseSegmentationDataset):
     """
     https://sites.google.com/view/zhouwx/dataset#h.p_hQS2jYeaFpV0
     """

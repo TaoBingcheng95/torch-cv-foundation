@@ -1,57 +1,76 @@
 import torch
-from torch import nn
-import torch.nn.functional as F
+import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
 
-from torchinfo import summary
- 
-# LeNet Model definition
-class LeNet(nn.Module):
+
+class LeNet5(nn.Module):
     def __init__(self):
-        super(LeNet, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
-        self.fc1_drop = nn.Dropout()
-        self.fc2 = nn.Linear(50, 10)
+        super(LeNet5, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5, stride=1)
+        self.pool1 = nn.AvgPool2d(kernel_size=2, stride=2)
+        self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5, stride=1)
+        self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)
+        self.fc1 = nn.Linear(in_features=16 * 4 * 4, out_features=120)
+        self.fc2 = nn.Linear(in_features=120, out_features=84)
+        self.fc3 = nn.Linear(in_features=84, out_features=10)
 
     def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.reshape(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = self.fc1_drop(x)
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        x = self.pool1(torch.relu(self.conv1(x)))
+        x = self.pool2(torch.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 4 * 4)
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 
-class LeNetV1(nn.Module):
-    def __init__(self, inchannels=1, num_classes=10):
-        super(LeNetV1, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(inchannels, 6, 5),  # in_channels, out_channels, kernel_size
-            nn.Sigmoid(),
-            nn.MaxPool2d(2, 2),  # kernel_size, stride
-            nn.Conv2d(6, 16, 5),
-            nn.Sigmoid(),
-            nn.MaxPool2d(2, 2)
-        )
-        self.fc = nn.Sequential(
-            nn.Linear(16 * 4 * 4, 120),
-            # 这里是16x4x4的原因是，数据源大小为28x28，而不是32x32
-            nn.Sigmoid(),
-            nn.Linear(120, 84),
-            nn.Sigmoid(),
-            nn.Linear(84, out_features=num_classes)
-        )
+if __name__ == '__main__':
+    # 定义数据变换和加载MNIST数据集
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
 
-    def forward(self, img):
-        feature = self.conv(img)
-        output = self.fc(feature.view(img.shape[0], -1))
-        return output
+    # 训练数据集
+    train_dataset = torchvision.datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LeNet().to(device)
-    # 输入数据的形状为(1, 1, 28, 28)，即单通道28x28的灰度图像（典型的MNIST图像）
-    summary(model, (1, 1, 28, 28))
+    # 测试数据集
+    test_dataset = torchvision.datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+    test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+    # 初始化LeNet-5模型以及定义损失函数和优化器
+    net = LeNet5()
+    criterion = nn.CrossEntropyLoss()  # 交叉熵损失函数，用于分类问题
+    optimizer = optim.Adam(net.parameters(), lr=0.001)  # Adam优化器，学习率为0.001
+
+    # 训练循环
+    for epoch in range(5):  # 可以根据需要调整训练的轮数
+        running_loss = 0.0
+        for i, data in enumerate(train_loader, 0):
+            inputs, labels = data
+            optimizer.zero_grad()  # 清零梯度
+
+            outputs = net(inputs)  # 前向传播
+            loss = criterion(outputs, labels)  # 计算损失
+            loss.backward()  # 反向传播，计算梯度
+            optimizer.step()  # 更新权重
+
+            running_loss += loss.item()
+        print(f"Epoch {epoch + 1}, Loss: {running_loss / len(train_loader)}")
+
+    print("Finished Training")
+
+    # 测试模型
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for data in test_loader:
+            inputs, labels = data
+            outputs = net(inputs)  # 前向传播
+            _, predicted = torch.max(outputs.data, 1)  # 找到最大概率的类别
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    accuracy = 100 * correct / total
+    print(f"Accuracy on the test set: {accuracy}%")

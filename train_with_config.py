@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, random_split
 from pprint import pprint
 
 from dataset.tianchi import TianchiDataset
-from trainers.pt_trainer import Trainer
+from trainers.basetrainer import Trainer
 
 # from config.load_config import TrainConfig
 # from datasets.transform import transform
