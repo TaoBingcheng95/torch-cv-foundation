@@ -19,8 +19,6 @@ def imshow(img, labels, classes, batch_size):
     plt.show()
 
 
-
-
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
@@ -66,8 +64,6 @@ def CIFAR10_load(batch_size = 4,num_workers=0, plot=False):
                             num_workers=num_workers)
 
     if plot:
-
-
         # get some random training images
         dataiter = iter(trainloader)
         images, labels = next(dataiter)
@@ -127,7 +123,7 @@ if __name__ == '__main__':
                 running_loss = 0.0
 
     print('Finished Training')
-    PATH = './output/cifar_net.pth'
+    PATH = '../output/cifar_net.pth'
     torch.save(net.state_dict(), PATH)
 
     # net = Net()

@@ -17,7 +17,7 @@ from torchvision.models._api import WeightsEnum
 
 from geo_modules.datasets import RGBBandsMissingError, unbind_samples
 from models.components import FCN, get_weight
-from . import utils
+from trainers import utils
 from .base import BaseTask
 
 

@@ -1,29 +1,17 @@
 # https://blog.itpub.net/18841117/viewspace-3015295/
 
-import os
 import sys
-import time
-import datetime
-import copy
 
-from PIL import Image
-from tqdm import tqdm
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from loguru import logger
 # import logging
 # logging.basicConfig(level=logging.INFO)
 # logger = logging.getLogger(__name__)
 
-import torch
-from torch import nn, optim
-from torch.utils.data import Dataset, DataLoader, random_split
-from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, random_split
+from torchvision import transforms
 from torchvision.datasets import FashionMNIST
 # from torch.utils.tensorboard import SummaryWriter
 
-from models.mynet.LeNet import LeNetV1
+from demo.LeNet import LeNetV1
 from trainers import Trainer
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -96,7 +84,7 @@ def FashionMNIST_loader(root='./data', val_ratio=0.4, batch_size=32, num_workers
 if __name__ == '__main__':
 
     device_flag = 'cuda:0'
-    FashionMNIST_dir = './data'
+    FashionMNIST_dir = '../data'
 
     # 超参数
     batch_size = 32

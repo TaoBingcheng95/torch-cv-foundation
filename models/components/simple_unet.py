@@ -166,26 +166,19 @@ class UNet(nn.Module):
         enc1, enc2, enc3, enc4, bottleneck = self.encoder(x)
         dec4 = self.decoder(enc1, enc2, enc3, enc4, bottleneck)
         segmentation_output = self.task_head(dec4)
-        classification_output = self.classification_head(bottleneck)
-        return classification_output # segmentation_output,
+        # classification_output = self.classification_head(bottleneck)
+        return segmentation_output # segmentation_output, classification_output
 
-
-# if __name__ == "__main__":
-#     model = UNet(in_channels=3, out_channels=1)  # 3个输入通道（RGB图像），1个输出通道（二分类）
-#     input_tensor = torch.randn(1, 3, 256, 256)  # 1个样本，3个通道，256x256的图像
-#     output = model(input_tensor)
-#     print(output.shape)  # 输出形状应为 (1, 1, 256, 256)
 
 
 if __name__ == '__main__':
     input_size = (1, 3, 512, 512)
     model = UNet(3, 1, num_classes=2) # 3个输入通道（RGB图像），1个输出通道（二分类）
 
-    # summary(model, input_size=input_size)
+    summary(model, input_size=input_size)
 
-    inputs = torch.randn(input_size)
-    output = model(inputs)
-    print(output)
-    print(inputs.shape, ' -> ', output.shape)
+    # inputs = torch.randn(input_size)
+    # output = model(inputs)
+    # print(inputs.shape, ' -> ', output.shape)
 
 

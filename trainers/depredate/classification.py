@@ -23,9 +23,9 @@ from torchmetrics.classification import (
 )
 from torchvision.models._api import WeightsEnum
 
-from geo_modules.datasets import RGBBandsMissingError, unbind_samples
-from models.components import get_weight
-from . import utils
+# from geo_modules.datasets import RGBBandsMissingError, unbind_samples
+from trainers import get_weight
+from trainers import utils
 from .base import BaseTask
 
 
@@ -221,10 +221,7 @@ class ClassificationTask(BaseTask):
             sample = unbind_samples(batch)[0]
 
             fig: Figure | None = None
-            try:
-                fig = datamodule.plot(sample)
-            except RGBBandsMissingError:
-                pass
+            fig = datamodule.plot(sample)
 
             if fig:
                 summary_writer = self.logger.experiment
@@ -365,10 +362,7 @@ class MultiLabelClassificationTask(ClassificationTask):
             sample = unbind_samples(batch)[0]
 
             fig: Figure | None = None
-            try:
-                fig = datamodule.plot(sample)
-            except RGBBandsMissingError:
-                pass
+            fig = datamodule.plot(sample)
 
             if fig:
                 summary_writer = self.logger.experiment

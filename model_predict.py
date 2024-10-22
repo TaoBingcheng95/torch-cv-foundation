@@ -1,8 +1,8 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from torchvision.datasets import FashionMNIST, MNIST
-from models.mynet.LeNet import LeNet
+from torchvision.datasets import MNIST
+from demo.LeNet import LeNet
 
 transform = transforms.Compose([
     # transforms.Resize(size=224),  # 将输入的28x28图像调整为224x224（用于较大的CNN模型）

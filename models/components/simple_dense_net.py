@@ -1,10 +1,8 @@
 import torch
 from torch import nn
 
-from torchvision.models.densenet import DenseNet
-from segmentation_models_pytorch.encoders import densenet
-
 from torchinfo import summary
+
 
 class Encoder(nn.Module):
     def __init__(self, input_size: int = 784, hidden_size: int = 256):

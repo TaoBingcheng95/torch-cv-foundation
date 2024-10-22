@@ -15,7 +15,7 @@ from torch import Tensor
 from torchvision.models._api import WeightsEnum
 
 from models.components import get_weight
-from . import utils
+from trainers import utils
 from .base import BaseTask
 
 

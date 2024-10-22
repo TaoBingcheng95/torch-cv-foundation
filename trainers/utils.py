@@ -14,7 +14,8 @@ from torch.nn.modules import Conv2d, Module
 
 
 def extract_backbone(path: str) -> tuple[str, 'OrderedDict[str, Tensor]']:
-    """Extracts a backbone from a lightning checkpoint file.
+    """
+    Extracts a backbone from a lightning checkpoint file.
 
     Args:
         path: path to checkpoint file (.ckpt)
@@ -55,14 +56,15 @@ def extract_backbone(path: str) -> tuple[str, 'OrderedDict[str, Tensor]']:
 
 
 def _get_input_layer_name_and_module(model: Module) -> tuple[str, Module]:
-    """Retrieve the input layer name and module from a timm model.
+    """
+    Retrieve the input layer name and module from a timm model.
 
     Args:
         model: timm model
     """
     keys = []
     children = list(model.named_children())
-    while children != []:
+    while children:
         name, module = children[0]
         keys.append(name)
         children = list(module.named_children())
@@ -74,7 +76,8 @@ def _get_input_layer_name_and_module(model: Module) -> tuple[str, Module]:
 def load_state_dict(
     model: Module, state_dict: 'OrderedDict[str, Tensor]'
 ) -> tuple[list[str], list[str]]:
-    """Load pretrained resnet weights to a model.
+    """
+    Load pretrained resnet weights to a model.
 
     Args:
         model: model to load the pretrained weights to
@@ -130,7 +133,8 @@ def reinit_initial_conv_layer(
     new_stride: int | tuple[int, int] | None = None,
     new_padding: str | int | tuple[int, int] | None = None,
 ) -> Conv2d:
-    """Clones a Conv2d layer while optionally retaining some of the original weights.
+    """
+    Clones a Conv2d layer while optionally retaining some of the original weights.
 
     When replacing the first convolutional layer in a model with one that operates over
     different number of input channels, we sometimes want to keep a subset of the kernel
