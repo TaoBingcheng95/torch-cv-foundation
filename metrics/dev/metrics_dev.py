@@ -1,7 +1,6 @@
 import numpy as np
 
 
-###################       metrics      ###################
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
@@ -44,7 +43,6 @@ class AverageMeter(object):
         self.initialized = False
 
 
-###################      cm metrics      ###################
 class ConfuseMatrixMeter(AverageMeter):
     """Computes and stores the average and current value"""
     def __init__(self, n_class):
@@ -61,7 +59,6 @@ class ConfuseMatrixMeter(AverageMeter):
     def get_scores(self):
         scores_dict = cm2score(self.sum)
         return scores_dict
-
 
 
 def harmonic_mean(xs):
@@ -162,3 +159,44 @@ def get_mIoU(num_classes, label_gts, label_preds):
     confusion_matrix = get_confuse_matrix(num_classes, label_gts, label_preds)
     score_dict = cm2score(confusion_matrix)
     return score_dict['miou']
+
+
+if __name__ == '__main__':
+
+    # 定义类别数量
+    num_classes = 3
+    # 示例数据
+    true_vectors = np.asarray([0, 1, 2, 1, 0, 2, 2, 1, 0, 1])
+    pred_vectors = np.asarray([0, 2, 2, 1, 0, 2, 0, 1, 1, 1])
+
+    # 将数据转化为适合函数输入的格式
+    label_gts = [true_vectors]
+    label_preds = [pred_vectors]
+
+    mm = ConfuseMatrixMeter(n_class=num_classes)
+    mm.update_cm(label_preds, label_gts)
+
+    print("Confusion Matrix:")
+    print(mm.val)
+
+    result = mm.get_scores()
+    for metric, score in result.items():
+        print(f"{metric}: {score:.4f}")
+
+    # # 计算混淆矩阵
+    # confusion_matrix = get_confuse_matrix(num_classes, label_gts, label_preds)
+    #
+    # # 打印混淆矩阵
+    # print("Confusion Matrix:")
+    # print(confusion_matrix)
+    #
+    # # 计算并打印各类指标
+    # scores = cm2score(confusion_matrix)
+    # print("\nScores:")
+    # for metric, score in scores.items():
+    #     print(f"{metric}: {score:.4f}")
+    #
+    # # 计算并打印平均交并比 (mIoU)
+    # miou = get_mIoU(num_classes, label_gts, label_preds)
+    # print(f"\nMean IoU: {miou:.4f}")
+    #

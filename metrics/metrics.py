@@ -11,7 +11,8 @@ class Metrics:
         return torch.zeros(size=(class_num, class_num), dtype=torch.int).to(self.device)
 
     def update(self):
-        self.cfm = self.cfm_init(self.class_num)
+        # self.cfm = self.cfm_init(self.class_num)
+        self.cfm.zero_()
 
     def sample_add(self, true_vector, pre_vector):
         true_vector = true_vector.flatten()

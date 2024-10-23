@@ -31,21 +31,16 @@ class BaseTrainer(nn.Module):
                  device='cuda',
                  resume=None,
                  num_classes: int = 2,
-
                  train_dataloader: DataLoader = None,
                  val_dataloader: DataLoader = None,
                  test_dataloader: DataLoader = None,
-
                  optimizer_type: str = 'adam',
                  scheduler_type: str = 'steplr',
                  lr: float = 0.001, # learning_rate
                  step_size:int=10,
                  gamma:float=0.1,
-
                  criterion=nn.CrossEntropyLoss(),
-
                  epochs: int = 5,
-
                  output_dir='./output',
                  cls=True,
                  compile = False, **kwargs):
@@ -122,7 +117,11 @@ class BaseTrainer(nn.Module):
         self.device = torch.device(self.device if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
+        self.logger.info('init optimizer ... ')
+        self.init_optim_scheduler()
+
         if self.resume:
+            self.logger.info(f'resume from {self.resume} ')
             self.load_model(self.resume)
             self.model_name = os.path.basename(self.resume)
 
@@ -133,9 +132,6 @@ class BaseTrainer(nn.Module):
         self.metrics = Metrics(self.num_classes, self.device)
         # 初始化混淆矩阵
         self.cnf_matrix = np.zeros((self.num_classes, self.num_classes))
-
-        self.logger.info('init optimizer ... ')
-        self.init_optim_scheduler()
 
         if self.compile:
             pass
@@ -380,7 +376,8 @@ class BaseTrainer(nn.Module):
         #     self.logger.info(f"{key}: {value}")
         return {'loss': avg_loss, 'acc': test_acc}
 
-    def predict(self, im_data):
+    @torch.no_grad()
+    def predict(self, inputs):
         """
         目标: 使用训练好的模型对给定的图像进行预测。
         加载模型参数: 从指定的检查点文件中加载模型的参数，并将其移动到指定的设备上。
@@ -390,12 +387,13 @@ class BaseTrainer(nn.Module):
         获取预测结果: 从预测输出中获取最大值对应的类别标签。
         返回预测结果: 返回预测结果，即预测的类别标签。
         """
-        im_data = torch.tensor(im_data).unsqueeze(0).to(self.device)
+        if not isinstance(inputs, torch.Tensor):
+            inputs = torch.tensor(inputs)
+        inputs = inputs.to(self.device)
         self.model.eval()
-        with torch.no_grad():
-            pred = self.model(im_data)
-            pred = torch.argmax(pred, dim=1)
-            return pred
+        pred = self.model(inputs)
+        pred = torch.argmax(pred, dim=1)
+        return pred
 
     def save_model(self, filename,checkpoint=None):
         """
@@ -426,7 +424,7 @@ class BaseTrainer(nn.Module):
             raise FileNotFoundError(f"Checkpoint file {checkpoint} not found.")
 
         try:
-            checkpoint = torch.load(checkpoint)
+            checkpoint = torch.load(checkpoint, weights_only=False)
             # start_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model'], strict=False)
             self.model.to(self.device)
@@ -434,8 +432,8 @@ class BaseTrainer(nn.Module):
             self.scheduler.load_state_dict(checkpoint['lr_schedule'])
         except Exception as e:
             self.logger.error(f"Warning: Error loading model from {checkpoint}: {e}")
-
-        self.logger.info(f"Model loaded from {checkpoint}")
+            raise e
+        # self.logger.info(f"Model loaded from {checkpoint}")
 
     def plot_acc_loss(self, save_path=None):
         # 检查数据有效性

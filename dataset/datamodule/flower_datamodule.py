@@ -77,7 +77,7 @@ class FlowerDataModule(LightningDataModule):
 
 if __name__ == '__main__':
     # 使用方法
-    data_module = FlowerDataModule(data_dir='../data/flower_data', batch_size=64, image_size=64)
+    data_module = FlowerDataModule(data_dir='../../data/flower_data', batch_size=64, image_size=64)
     data_module.prepare_data()  # 准备数据，如果需要下载的话
     data_module.setup('fit')  # 设置数据，为训练做准备
 

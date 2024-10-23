@@ -16,7 +16,13 @@ from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 # import pytorch_lightning as pl
 import lightning.pytorch as pl
+from loguru import logger
 
+from dataset.datamodule.mnist_datamodule import MNISTDataModule
+from models.components import SimpleDenseNet
+from models.module import MNISTLitModule
+
+torch.set_float32_matmul_precision('medium') # 'medium' | 'high'
 
 class LitAutoEncoder(pl.LightningModule):
     def __init__(self):
@@ -47,10 +53,74 @@ class LitAutoEncoder(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
         return optimizer
 
-if __name__ == "__main__":
-    dataset = MNIST('./data', download=True, transform=transforms.ToTensor())
-    train, val = random_split(dataset, [55000, 5000])
 
-    autoencoder = LitAutoEncoder()
-    trainer = pl.Trainer(max_epochs=3, accelerator="gpu")
-    trainer.fit(autoencoder, DataLoader(train), DataLoader(val))
+def prepare_data():
+    train_full_ds = MNIST('./data',
+                     train=True,
+                     download=True,
+                     transform=transforms.ToTensor())
+    print(len(train_full_ds))
+    train_ds, val_ds = random_split(train_full_ds, [55000, 5000])
+    test_ds = MNIST('./data',
+                     train=False,
+                     download=True,
+                     transform=transforms.ToTensor())
+    print(len(test_ds))
+    train_dl = DataLoader(train_ds,
+                          batch_size=32,
+                          num_workers=0,
+                          pin_memory=True)
+    val_dl = DataLoader(val_ds,
+                          batch_size=32,
+                          num_workers=0,
+                          pin_memory=True)
+    test_dl = DataLoader(test_ds,
+                          batch_size=32,
+                          num_workers=0,
+                          pin_memory=True)
+    return train_dl, val_dl, test_dl
+
+
+if __name__ == "__main__":
+
+    mnist_dm = MNISTDataModule(data_dir='./data',
+                             batch_size=32,
+                             pin_memory=True)
+
+    # autoencoder = LitAutoEncoder()
+    net = SimpleDenseNet()
+    optimizer = torch.optim.Adam(net.parameters(),
+                                 lr=1e-3,
+                                 weight_decay= 0.0)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                          mode='min',
+                                                          patience=10,
+                                                          factor=0.1)
+    # compile model for faster training with pytorch 2.0
+    compile = False
+    mm = MNISTLitModule(net,
+                        torch.optim.Adam,
+                        torch.optim.lr_scheduler.ReduceLROnPlateau,
+                        compile)
+
+    model_checkpoint = pl.callbacks.ModelCheckpoint(monitor='val/loss',
+                                                    # dirpath='./checkpoints',
+                                                    filename='mnist-{epoch:02d}-{val_loss:.2f}',
+                                                    # save_top_k=1,
+                                                    save_last= True,
+                                                    auto_insert_metric_name= False,
+                                                    mode='max')
+    early_stopping = pl.callbacks.EarlyStopping(monitor='val/loss',
+                                                patience=100,
+                                                mode='max')
+    model_summary = pl.callbacks.RichModelSummary(max_depth=-1)
+    rich_progress_bar = pl.callbacks.RichProgressBar()
+
+    trainer = pl.Trainer(max_epochs=10,
+                         devices=1,
+                         accelerator="gpu",
+                         # callbacks = [model_checkpoint, early_stopping, model_summary]
+                         )
+
+    trainer.fit(mm, # autoencoder
+                datamodule=mnist_dm)
