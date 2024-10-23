@@ -6,13 +6,12 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
 from dataset.tianchi import TianchiDataset
-from models.mynet.Unet import UNetV1
+from models.mynet.Unet import UNet
 
 if __name__ == '__main__':
 
-    ckpt = 'checkpoints/20240930_153650/epoch_1_acc_0.8594.pth'
-    model = UNetV1(in_channels=3, out_channels=2)
-    model.load_state_dict(torch.load(ckpt, weights_only=True))
+
+    model = UNet(n_channels=3, n_classes=2)
     device = torch.device('cuda:0' if torch.cuda.is_available() else "cpu")
     model.to(device)
 

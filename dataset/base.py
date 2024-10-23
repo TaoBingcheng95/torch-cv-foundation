@@ -30,7 +30,7 @@ class BaseSegmentationDataset(Dataset, ABC):
         if self.band_reversal:
             image = image[:, :, ::-1]
         image = image.transpose((2, 0, 1))
-        mask = np.asarray(Image.open(mask_path))
+        mask = np.asarray(Image.open(mask_path)).astype(np.int64)
         # mask = np.expand_dims(mask, 0)
         return image, mask
 

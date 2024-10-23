@@ -276,6 +276,8 @@ class BaseTrainer(nn.Module):
 
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
+            # print(outputs.dtype)
+            # print(targets.dtype)
             loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()

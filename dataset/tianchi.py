@@ -30,7 +30,7 @@ class TianchiDataset(BaseSegmentationDataset):
         if self.band_reversal:
             image = image[:, :, ::-1]
         image = image.transpose((2, 0, 1)).astype(np.float32)
-        mask = np.array(Image.open(mask_path))
+        mask = np.array(Image.open(mask_path)).astype(np.int64)
         # mask = np.expand_dims(mask, 0)
         return image, mask
 
