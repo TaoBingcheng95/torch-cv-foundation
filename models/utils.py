@@ -57,7 +57,7 @@ def extract_backbone(path: str) -> tuple[str, 'OrderedDict[str, Tensor]']:
 
 def _get_input_layer_name_and_module(model: Module) -> tuple[str, Module]:
     """
-    Retrieve the input layer name and module from a timm model.
+    Retrieve the input layer name and modules from a timm model.
 
     Args:
         model: timm model

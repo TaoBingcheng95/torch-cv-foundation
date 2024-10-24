@@ -6,6 +6,8 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
 from torchvision.datasets import MNIST
 from torchvision.transforms import transforms
 
+_DEFAULT_MNIST_BATCH_SIZE = 32
+_DEFAULT_RESIZE_SIZE = 32
 
 class MNISTDataModule(LightningDataModule):
     """
@@ -60,6 +62,7 @@ class MNISTDataModule(LightningDataModule):
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
+        resize_32=False
     ) -> None:
         """
         Initialize a `MNISTDataModule`.
@@ -77,10 +80,17 @@ class MNISTDataModule(LightningDataModule):
         self.save_hyperparameters(logger=False)
 
         # data transformations
-        self.transforms = transforms.Compose(
-            [transforms.ToTensor(),
-             transforms.Normalize((0.1307,), (0.3081,))]
-        )
+        if resize_32:
+            self.transforms = transforms.Compose(
+                [transforms.ToTensor(),
+                 transforms.Resize((_DEFAULT_RESIZE_SIZE, _DEFAULT_RESIZE_SIZE)),
+                 transforms.Normalize((0.1307,), (0.3081,))]
+            )
+        else:
+            self.transforms = transforms.Compose(
+                [transforms.ToTensor(),
+                 transforms.Normalize((0.1307,), (0.3081,))]
+            )
 
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
@@ -183,6 +193,16 @@ class MNISTDataModule(LightningDataModule):
             drop_last=True,
             shuffle=False,
         )
+
+    def predict_dataloader(self) -> DataLoader:
+        """Called by Trainer `predict()` method. Use the same data as the test_dataloader."""
+        return DataLoader(self.data_test,
+                          batch_size=self.batch_size_per_device,
+                          num_workers=self.hparams.num_workers,
+                          pin_memory=self.hparams.pin_memory,
+                          drop_last=True,
+                          shuffle=False,
+                          )
 
     def teardown(self, stage: Optional[str] = None) -> None:
         """

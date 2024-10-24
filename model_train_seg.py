@@ -1,10 +1,7 @@
-import os
 import sys
-from glob import glob
 from torch.utils.data import DataLoader, random_split
 
-from dataset.tianchi import TianchiDataset
-from dataset.whdld import WHDLDDataset
+from depredate.tianchi import TianchiDataset
 from models.mynet.Unet import UNet
 from trainers import BaseTrainer
 

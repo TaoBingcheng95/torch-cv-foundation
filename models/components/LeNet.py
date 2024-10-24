@@ -7,11 +7,8 @@ from torchinfo import summary
 class LeNetFeatExtractor(nn.Module):
     def __init__(self):
         super(LeNetFeatExtractor, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        #  1,1,32,32
-        # self.conv1 = nn.Conv2d(1, 128, 3)
-        # self.conv2 = nn.Conv2d(128, 16, 3)
+        self.conv1 = nn.Conv2d(1, 128, 3)
+        self.conv2 = nn.Conv2d(128, 16, 3)
 
     def forward(self, x):
         x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
@@ -21,11 +18,9 @@ class LeNetFeatExtractor(nn.Module):
 class LeNetClassifier(nn.Module):
     def __init__(self):
         super(LeNetClassifier, self).__init__()
-        self.fc1 = nn.Linear(16 * 4 * 4, 120)
-        # self.fc1 = nn.Linear(16 * 6 * 6, 120)  # 1,1,32,32
+        self.fc1 = nn.Linear(16 * 6 * 6, 120)
         self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 10)
-
 
     def forward(self, x):
         x = torch.flatten(x,1)
@@ -47,6 +42,9 @@ class LeNet(nn.Module):
 
 
 class LeNetv2(nn.Module):
+    """
+    support 28x28 MNIST data
+    """
 
     def __init__(self):
         super(LeNetv2, self).__init__()
@@ -80,27 +78,6 @@ class LeNetv2(nn.Module):
         a3 = F.softmax(a2, dim=0)
         return a3
 
-
-class LeNet5(nn.Module):
-    def __init__(self):
-        super(LeNet5, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5, stride=1)
-        self.pool1 = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5, stride=1)
-        self.pool2 = nn.AvgPool2d(kernel_size=2, stride=2)
-
-        self.fc1 = nn.Linear(in_features=16 * 4 * 4, out_features=120)
-        self.fc2 = nn.Linear(in_features=120, out_features=84)
-        self.fc3 = nn.Linear(in_features=84, out_features=10)
-
-    def forward(self, x):
-        x = self.pool1(torch.relu(self.conv1(x)))
-        x = self.pool2(torch.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 4 * 4)
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
 
 
 if __name__ == '__main__':

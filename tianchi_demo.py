@@ -1,11 +1,10 @@
-import os
 import torch
 from torch import nn, optim
 import sys
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
-from dataset.tianchi import TianchiDataset
+from depredate.tianchi import TianchiDataset
 from models.mynet.Unet import UNet
 
 if __name__ == '__main__':

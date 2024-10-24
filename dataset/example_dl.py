@@ -137,12 +137,6 @@ class FashionMNISTLoader:
         axis.set_title(self.idx_to_class[y])
         plt.show()
 
-"""
-(0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]
-
-"""
 
 class CIFAR10Loader:
     def __init__(self, root, train=True, transform=None, target_transform=None, download=False, val_split = 0.4):

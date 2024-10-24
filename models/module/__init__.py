@@ -1,1 +1,0 @@
-from .mnist_module import MNISTLitModule
