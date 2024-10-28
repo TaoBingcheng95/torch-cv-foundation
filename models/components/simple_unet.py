@@ -77,6 +77,7 @@ class ContractBlock(nn.Module):
     def forward(self, x):
         return self.contract(x)
 
+
 class ExpandBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, padding):
         super(ExpandBlock, self).__init__()
@@ -92,6 +93,7 @@ class ExpandBlock(nn.Module):
 
     def forward(self, x):
         return self.expand(x)
+
 
 class UNetEncoder(nn.Module):
     def __init__(self, in_channels):
@@ -109,6 +111,7 @@ class UNetEncoder(nn.Module):
         enc4 = self.enc4(enc3)
         bottleneck = self.bottleneck(enc4)
         return enc1, enc2, enc3, enc4, bottleneck
+
 
 class UNetDecoder(nn.Module):
     def __init__(self):
@@ -133,6 +136,7 @@ class UNetDecoder(nn.Module):
 
         return dec4
 
+
 class UNetTaskHead(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(UNetTaskHead, self).__init__()
@@ -140,6 +144,7 @@ class UNetTaskHead(nn.Module):
 
     def forward(self, x):
         return self.final_conv(x)
+
 
 class UNetClassificationHead(nn.Module):
     def __init__(self, in_channels, num_classes):
@@ -153,7 +158,7 @@ class UNetClassificationHead(nn.Module):
         x = self.fc(x)
         return x
 
-#     def __init__(self, in_channels, out_channels, num_classes):
+
 class UNet(nn.Module):
     def __init__(self, in_channels, out_channels, num_classes):
         super(UNet, self).__init__()
