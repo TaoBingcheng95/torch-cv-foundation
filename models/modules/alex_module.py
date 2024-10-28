@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
 
-from .model.AlexNet import AlexNet
+from ..components.AlexNet import AlexNet
 
 
 class AlexNetLightning(pl.LightningModule):
@@ -26,14 +26,14 @@ class AlexNetLightning(pl.LightningModule):
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch):
         images, labels = batch
         logits = self(images)
         loss = F.cross_entropy(logits, labels)
         self.log('train_loss', loss)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch):
         images, labels = batch
         logits = self(images)
         preds = torch.argmax(logits, dim=1)

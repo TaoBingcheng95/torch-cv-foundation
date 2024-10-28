@@ -5,7 +5,7 @@ import torch.nn as nn
 # import torchvision
 from torch.nn import BatchNorm2d
 
-from .resnet import Resnet18
+from . import resnet# import Resnet18
 
 
 class ConvBNReLU(nn.Module):
@@ -118,7 +118,7 @@ class AttentionRefinementModule(nn.Module):
 class ContextPath(nn.Module):
     def __init__(self, *args, **kwargs):
         super(ContextPath, self).__init__()
-        self.resnet = Resnet18()
+        self.resnet = resnet.Resnet18()
         self.arm16 = AttentionRefinementModule(256, 128)
         self.arm32 = AttentionRefinementModule(512, 128)
         self.conv_head32 = ConvBNReLU(128, 128, ks=3, stride=1, padding=1)
@@ -308,3 +308,16 @@ class BiSeNetV1(nn.Module):
                 wd_params += child_wd_params
                 nowd_params += child_nowd_params
         return wd_params, nowd_params, lr_mul_wd_params, lr_mul_nowd_params
+
+
+
+if __name__ == "__main__":
+    model = BiSeNetV1(n_classes=6)  # For a single-channel output (e.g., binary segmentation)
+    # print(model)
+
+    input_size = (1, 3, 512, 512)
+    x = torch.randn(input_size)  # Example input tensor (batch_size, channels, height, width)
+    # summary(model, input_size=(1, 3, 512, 512))
+    output = model(x)
+    print(output.shape)  # Should be (1, 1, 256, 256) for this example
+

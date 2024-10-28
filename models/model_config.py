@@ -148,6 +148,7 @@ def SemanticSegmentationModel(model: str ="unet",
 
     return seg_model
 
+
 def ClassificationModel(model: str = 'resnet50',
                         weights: WeightsEnum | str | bool | None = None,
                         in_channels: int = 3,

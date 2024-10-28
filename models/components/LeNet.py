@@ -1,7 +1,10 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torchinfo import summary
+try:
+    from torchinfo import summary
+except ImportError as e:
+    print(e)
 
 
 class LeNetFeatExtractor(nn.Module):
