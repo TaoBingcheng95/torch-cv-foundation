@@ -4,10 +4,12 @@ import sys
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
-from depredate.tianchi import TianchiDataset
+from dataset.my_dl import TianchiDataset, NAIPDataset
 from models.mynet.Unet import UNet
 
 if __name__ == '__main__':
+
+    data_dir = '/data/tbc/segmentation/naip'
 
 
     model = UNet(n_channels=3, n_classes=2)
@@ -21,11 +23,10 @@ if __name__ == '__main__':
                           weight_decay=0)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
 
-    Tianchi_dir = 'D:\\myspace\\dataset\\segemnt\\tianchi\\train'
     val_ratio = 0.4
     test_ratio = 0.2
     num_classes = 2
-    ds = TianchiDataset(root=Tianchi_dir, img_folder='image', label_folder='label')
+    ds = NAIPDataset(root=data_dir)
     train_ds, val_ds, test_ds = random_split(ds,
                                              [len(ds) - int(len(ds) * val_ratio) - int(len(ds) * test_ratio),
                                               int(len(ds) * val_ratio),

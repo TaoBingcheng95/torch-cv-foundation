@@ -162,5 +162,7 @@ cython_debug/
 #.idea/
 /code
 /data
-/output
 /lightning_logs
+/outputs
+/output
+/logs

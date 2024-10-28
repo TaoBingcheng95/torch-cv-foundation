@@ -1,6 +1,0 @@
-model:
-  name: "unet"  # 模型名称：unet 或其他
-  init_weights: true  # 是否初始化模型权重
-
-save:
-  output_dir: "outputs"
