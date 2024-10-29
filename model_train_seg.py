@@ -1,4 +1,5 @@
 import sys
+from pprint import pprint
 import numpy as np
 from torch.utils.data import DataLoader, random_split
 import segmentation_models_pytorch as smp
@@ -8,23 +9,23 @@ from dataset.my_dl import TianchiDataset, NAIPDataset
 from models.components import SimpleUNet, UNet
 from trainers import BaseTrainer
 from transforms.transforms import train_transform
-
+from metrics import Metrics
 
 
 if __name__ == '__main__':
 
-    Tianchi_dir = "/data/tbc/segmentation/tianchi" # 'D:\\myspace\\dataset\\segemnt\\tianchi'
+    Tianchi_dir = 'D:\\myspace\\dataset\\segemnt\\tianchi' # "/data/tbc/segmentation/tianchi" #
     # WHDLD_dir = '/data/tbc/seg/WHDLD'
     # data_dir = '/data/tbc/segmentation/naip'
 
     val_ratio = 0.4
     test_ratio = 0.2
     num_classes = 2 # naip=7 whdld=6+1
-    batch_size = 4
+    batch_size = 8
     if sys.platform.startswith('win'):
         num_workers = 0
     else:
-        num_workers = 0 # 4
+        num_workers = 4
     ds = TianchiDataset(root=Tianchi_dir)
     data_count = len(ds)
     val_count = int(data_count * val_ratio)
@@ -34,7 +35,7 @@ if __name__ == '__main__':
     # train_ds.dataset.transform = train_transform
     train_dl = DataLoader(train_ds,
                           batch_size=batch_size,
-                          shuffle=True,
+                          shuffle=False,
                           num_workers=num_workers,
                           drop_last=True,
                           pin_memory=True)
@@ -52,8 +53,13 @@ if __name__ == '__main__':
                          pin_memory=True)
 
     # model = smp.Unet('resnet34', classes=num_classes, activation='softmax')
-
-    model = UNet(in_channels=3, out_channels=num_classes, use_attention=False)
+    model = smp.Unet(
+        encoder_name="resnet34",  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
+        encoder_weights="imagenet",  # use `imagenet` pre-trained weights for encoder initialization
+        in_channels=3,  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
+        classes=2,  # model output channels (number of classes in your dataset)
+    )
+    # model = UNet(in_channels=3, out_channels=num_classes, use_attention=False)
 
     # optimizer = torch.optim.Adam(model.parameters(),
     #                              lr=1e-3,
@@ -62,29 +68,36 @@ if __name__ == '__main__':
     #                                            mode='min',
     #                                            patience=10,
     #                                            factor=0.1)
-
     tt = BaseTrainer(model=model,
                      device='cuda:0',
                      train_dataloader=train_dl,
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
-                     # resume='output/20241028_144830/epoch_60_valacc_0.4985.pth',
+                     resume='output/20240920_094528/epoch_19_acc_0.9623_miou_0.9274.pth',
                      num_classes=num_classes,
                      optimizer_type='sgd',
-                     epochs=100,
+                     epochs=1,
                      compile=False # compile model for faster training with pytorch 2.0
                      )
-    tt.fit()
+    # tt.fit()
+
 
     x, y = next(iter(test_dl))
-    pred = tt.predict(x)
-    # print(x.shape, y.shape)
-    # print(pred.shape)
+    preds = tt.predict(x)
+    print(x.shape, y.shape)
+    print(preds.shape)
     # print(np.unique(y[0,:,:]))
     # print(np.unique(pred.cpu().numpy()[0,:,:]))
 
-    fig, axis = plt.subplots(1,3)
-    axis[0].imshow(x[0,:,:,:].permute(1,2,0).numpy().astype(np.uint8))
-    axis[1].imshow(y[0,:,:])
-    axis[2].imshow(pred.cpu().numpy()[0,:,:])
-    plt.savefig('test.png')
+    metrics = Metrics(2,'cuda:0')
+    # 初始化混淆矩阵
+    cnf_matrix = np.zeros((2, 2))
+    metrics.sample_add(y.to('cuda:0'), preds.to('cuda:0'))
+    results = metrics.compute()
+    pprint(results)
+
+    # fig, axis = plt.subplots(1,3)
+    # axis[0].imshow(x[0,:,:,:].permute(1,2,0).numpy().astype(np.uint8))
+    # axis[1].imshow(y[0,:,:])
+    # axis[2].imshow(pred.cpu().numpy()[0,:,:])
+    # plt.savefig('output/test.png')
