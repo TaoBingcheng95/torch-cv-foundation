@@ -7,57 +7,54 @@ import matplotlib.pyplot as plt
 from dataset.my_dl import TianchiDataset, NAIPDataset
 from models.components import SimpleUNet, UNet
 from trainers import BaseTrainer
+from transforms.transforms import train_transform
 
 
 
 if __name__ == '__main__':
 
-    Tianchi_dir = 'D:\\myspace\\dataset\\segemnt\\tianchi'
+    Tianchi_dir = "/data/tbc/segmentation/tianchi" # 'D:\\myspace\\dataset\\segemnt\\tianchi'
     # WHDLD_dir = '/data/tbc/seg/WHDLD'
     # data_dir = '/data/tbc/segmentation/naip'
 
-    # img_list = glob(os.path.join(Tianchi_dir, 'image', '*.jpg'))
-    # label_list = glob(os.path.join(Tianchi_dir, 'label', '*.jpg'))
-    # print(len(img_list), len(label_list))
-
     val_ratio = 0.4
     test_ratio = 0.2
-    num_classes = 7 # naip
-    batch_size = 8
+    num_classes = 2 # naip=7 whdld=6+1
+    batch_size = 4
     if sys.platform.startswith('win'):
         num_workers = 0
     else:
-        num_workers = 4
+        num_workers = 0 # 4
     ds = TianchiDataset(root=Tianchi_dir)
-    # ds = NAIPDataset(root=data_dir)
-    # ds = WHDLDDataset(root='/data/tbc/seg/WHDLD')
+    data_count = len(ds)
+    val_count = int(data_count * val_ratio)
+    test_count = int(data_count * test_ratio)
 
-    train_ds, val_ds, test_ds = random_split(ds,
-                                             [len(ds) - int(len(ds) * val_ratio) - int(len(ds) * test_ratio),
-                                              int(len(ds) * val_ratio),
-                                              int(len(ds) * test_ratio)])
+    train_ds, val_ds, test_ds = random_split(ds, [data_count - val_count - test_count, val_count, test_count])
+    # train_ds.dataset.transform = train_transform
     train_dl = DataLoader(train_ds,
                           batch_size=batch_size,
                           shuffle=True,
-                          num_workers=0,
+                          num_workers=num_workers,
                           drop_last=True,
                           pin_memory=True)
     val_dl = DataLoader(val_ds,
                         batch_size=batch_size,
                         shuffle=False,
-                        num_workers=0,
+                        num_workers=num_workers,
                         drop_last=True,
                         pin_memory=True)
     test_dl = DataLoader(test_ds,
                          batch_size=batch_size,
                          shuffle=False,
-                         num_workers=0,
+                         num_workers=num_workers,
                          drop_last=True,
                          pin_memory=True)
 
-    model = smp.Unet('resnet34', classes=2, activation='softmax')
+    # model = smp.Unet('resnet34', classes=num_classes, activation='softmax')
 
-    # model = UNet(in_channels=3, out_channels=num_classes, use_attention=True)
+    model = UNet(in_channels=3, out_channels=num_classes, use_attention=False)
+
     # optimizer = torch.optim.Adam(model.parameters(),
     #                              lr=1e-3,
     #                              weight_decay=0.0)
@@ -75,24 +72,19 @@ if __name__ == '__main__':
                      num_classes=num_classes,
                      optimizer_type='sgd',
                      epochs=100,
-                     compile=False # # compile model for faster training with pytorch 2.0
+                     compile=False # compile model for faster training with pytorch 2.0
                      )
-    # tt.fit()
+    tt.fit()
 
     x, y = next(iter(test_dl))
     pred = tt.predict(x)
-    print(x.shape, y.shape)
-    print(pred.shape)
-
-    print(np.unique(y[0,:,:]))
-    print(np.unique(pred.cpu().numpy()[0,:,:]))
-
+    # print(x.shape, y.shape)
+    # print(pred.shape)
+    # print(np.unique(y[0,:,:]))
+    # print(np.unique(pred.cpu().numpy()[0,:,:]))
 
     fig, axis = plt.subplots(1,3)
     axis[0].imshow(x[0,:,:,:].permute(1,2,0).numpy().astype(np.uint8))
     axis[1].imshow(y[0,:,:])
     axis[2].imshow(pred.cpu().numpy()[0,:,:])
     plt.savefig('test.png')
-
-    # # print(y)
-    # # print(pred)

@@ -126,7 +126,7 @@ class UNet(nn.Module):
 
 
 if __name__ == "__main__":
-    model = UNet(in_channels=3, out_channels=6, use_attention=False)  # For a single-channel output (e.g., binary segmentation)
+    model = UNet(in_channels=3, out_channels=2, use_attention=False)  # For a single-channel output (e.g., binary segmentation)
     # print(model)
 
     input_size = (1, 3, 512, 512)
