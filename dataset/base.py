@@ -56,6 +56,7 @@ class BaseSegmentationDataset(Dataset, ABC):
         finally:
             plt.close()
 
+
 class BaseClassificationDataset:
     def __init__(self, data_dir, transform, batch_size):
         self.data_dir = data_dir

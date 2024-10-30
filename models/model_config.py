@@ -23,7 +23,7 @@ import timm
 
 from models.components import FCN
 from models import utils
-from models.components import get_weight
+# from models.components import get_weight
 
 
 BACKBONE_LAT_DIM_MAP = {
@@ -133,7 +133,8 @@ def SemanticSegmentationModel(model: str ="unet",
             elif os.path.exists(weights):
                 _, state_dict = utils.extract_backbone(weights)
             else:
-                state_dict = get_weight(weights).get_state_dict(progress=True)
+                pass
+                # state_dict = get_weight(weights).get_state_dict(progress=True)
             seg_model.encoder.load_state_dict(state_dict)
 
     # Freeze backbone
@@ -194,7 +195,8 @@ def ClassificationModel(model: str = 'resnet50',
         elif os.path.exists(weights):
             _, state_dict = utils.extract_backbone(weights)
         else:
-            state_dict = get_weight(weights).get_state_dict(progress=True)
+            pass
+            # state_dict = get_weight(weights).get_state_dict(progress=True)
         utils.load_state_dict(cls_model, state_dict)
 
     # Freeze backbone and unfreeze classifier head

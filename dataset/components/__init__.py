@@ -1,0 +1,1 @@
+from .torch_dataset import MNISTLoader, FashionMNISTLoader, CIFAR10Loader

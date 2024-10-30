@@ -42,7 +42,6 @@ class ImageClassificationBase(nn.Module):
                 epoch, result['train_loss'], result['val_loss'], result['val_acc']))
 
 
-
 class MyModel(ImageClassificationBase):
     def __init__(self):
         super().__init__(ImageClassificationBase)
