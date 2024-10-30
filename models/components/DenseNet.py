@@ -1,138 +1,191 @@
+# https://github.com/pytorch/vision/blob/main/torchvision/models/densenet.py
+# https://github.com/andreasveit/densenet-pytorch/blob/master/densenet.py
+
+from collections import OrderedDict
+from typing import List, Tuple
+
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.checkpoint as cp
+from torch import Tensor
 
-class DenseBlock(nn.Module):
-    # 默认不使用瓶颈层，即使用DenseNet-A模型
-    def __init__(self, num_input_chennel, growth_rate, drop_rate, bottleneck=0):
+from torchinfo import summary
+
+
+class DenseLayer(nn.Module):
+    def __init__(
+        self, num_input_features: int, growth_rate: int, bn_size: int, drop_rate: float, memory_efficient: bool = False
+    ) -> None:
         super().__init__()
-        self.bottle = bottleneck
-        if bottleneck:
-            self.bottleneck = growth_rate * bottleneck
-        else:
-            self.bottleneck = num_input_chennel
-        self.norm1 = nn.BatchNorm2d(int(num_input_chennel))
+        self.norm1 = nn.BatchNorm2d(num_input_features)
         self.relu1 = nn.ReLU(inplace=True)
-        self.conv1 = nn.Conv2d(int(num_input_chennel), int(self.bottleneck), kernel_size=1, stride=1, bias=False)
+        self.conv1 = nn.Conv2d(num_input_features, bn_size * growth_rate, kernel_size=1, stride=1, bias=False)
 
-        self.norm2 = nn.BatchNorm2d(int(self.bottleneck))
+        self.norm2 = nn.BatchNorm2d(bn_size * growth_rate)
         self.relu2 = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(int(self.bottleneck), int(growth_rate), kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(bn_size * growth_rate, growth_rate, kernel_size=3, stride=1, padding=1, bias=False)
 
         self.drop_rate = float(drop_rate)
+        self.memory_efficient = memory_efficient
 
-    def bn_function(self, inputs):
+    def bn_function(self, inputs: List[Tensor]) -> Tensor:
         concated_features = torch.cat(inputs, 1)
-        if self.bottle:
-            bottleneck_output = self.conv1(self.relu1(self.norm1(concated_features)))
-            return bottleneck_output
+        bottleneck_output = self.conv1(self.relu1(self.norm1(concated_features)))  # noqa: T484
+        return bottleneck_output
+
+    # todo: rewrite when torchscript supports any
+    def any_requires_grad(self, input: List[Tensor]) -> bool:
+        for tensor in input:
+            if tensor.requires_grad:
+                return True
+        return False
+
+    @torch.jit.unused  # noqa: T484
+    def call_checkpoint_bottleneck(self, input: List[Tensor]) -> Tensor:
+        def closure(*inputs):
+            return self.bn_function(inputs)
+
+        return cp.checkpoint(closure, *input, use_reentrant=False)
+
+    @torch.jit._overload_method  # noqa: F811
+    def forward(self, input: List[Tensor]) -> Tensor:  # noqa: F811
+        pass
+
+    @torch.jit._overload_method  # noqa: F811
+    def forward(self, input: Tensor) -> Tensor:  # noqa: F811
+        pass
+
+    # torchscript does not yet support *args, so we overload method
+    # allowing it to take either a List[Tensor] or single Tensor
+    def forward(self, input: Tensor) -> Tensor:  # noqa: F811
+        if isinstance(input, Tensor):
+            prev_features = [input]
         else:
-            return concated_features
-    
-    def forward(self,x):
-        x = self.bn_function(x)
-        x = self.conv2(self.relu2(self.norm2(x))) 
-        if self.drop_rate > 0.0:
-            x = nn.Dropout(p=self.drop_rate)(x)
-        return x
-    
-class DenseLayer(nn.ModuleDict):
-    def __init__(self,num_layers,num_input_chennel,growth_rate,drop_rate,bottleneck):
+            prev_features = input
+
+        if self.memory_efficient and self.any_requires_grad(prev_features):
+            if torch.jit.is_scripting():
+                raise Exception("Memory Efficient not supported in JIT")
+
+            bottleneck_output = self.call_checkpoint_bottleneck(prev_features)
+        else:
+            bottleneck_output = self.bn_function(prev_features)
+
+        new_features = self.conv2(self.relu2(self.norm2(bottleneck_output)))
+        if self.drop_rate > 0:
+            new_features = F.dropout(new_features, p=self.drop_rate, training=self.training)
+        return new_features
+
+
+class DenseBlock(nn.ModuleDict):
+    _version = 2
+
+    def __init__(
+        self,
+        num_layers: int,
+        num_input_features: int,
+        bn_size: int,
+        growth_rate: int,
+        drop_rate: float,
+        memory_efficient: bool = False,
+    ) -> None:
         super().__init__()
         for i in range(num_layers):
-            layer = DenseBlock(num_input_chennel + i * growth_rate,growth_rate=growth_rate,bottleneck=bottleneck,drop_rate=drop_rate)
-            self.add_module(f"denselayer{(i + 1)}", layer) 
-                
-    def forward(self, x): 
-        #torch.cat()函数将列表/元组中的元素按某个维度进行合并，因此每一层的结果加到列表中
-        x_list = [x]
-        for name ,layer in self.items():
-            x = layer(x_list)
-            x_list.append(x)
-        return torch.cat(x_list,1)
-    
-class Transition(nn.Module):
-    def __init__(self, num_input_chennel, theta):
+            layer = DenseLayer(
+                num_input_features + i * growth_rate,
+                growth_rate=growth_rate,
+                bn_size=bn_size,
+                drop_rate=drop_rate,
+                memory_efficient=memory_efficient,
+            )
+            self.add_module("denselayer%d" % (i + 1), layer)
+
+    def forward(self, init_features: Tensor) -> Tensor:
+        features = [init_features]
+        for name, layer in self.items():
+            new_features = layer(features)
+            features.append(new_features)
+        return torch.cat(features, 1)
+
+
+class Transition(nn.Sequential):
+    def __init__(self, num_input_features: int, num_output_features: int) -> None:
         super().__init__()
-        self.norm = nn.BatchNorm2d(int(num_input_chennel))
+        self.norm = nn.BatchNorm2d(num_input_features)
         self.relu = nn.ReLU(inplace=True)
-        self.conv = nn.Conv2d(int(num_input_chennel),int(theta * num_input_chennel),kernel_size=1, stride=1, bias=False)
+        self.conv = nn.Conv2d(num_input_features, num_output_features, kernel_size=1, stride=1, bias=False)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2)
 
-    def forward(self, x):
-        x = self.pool(self.conv(self.relu(self.norm(x))))
-        return x
 
-class DenseNets(nn.Module):
-    def __init__(self,
-                 input_channels = 3,
-                 out_features=10,
-                 dataset:str='ImageNet',
-                 growth_rate:int=32,
-                 denselayer_config:list=[6, 12, 24, 16],
-                 drop_rate:float=0,
-                 bottleneck:float=0,
-                 compression:float=1):
+class DenseNet(nn.Module):
+    r"""
+    Densenet-BC model class, based on
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
+
+    Args:
+        growth_rate (int) - how many filters to add each layer (`k` in paper)
+        block_config (list of 4 ints) - how many layers in each pooling block
+        num_init_features (int) - the number of filters to learn in the first convolution layer
+        bn_size (int) - multiplicative factor for number of bottle neck layers
+          (i.e. bn_size * k features in the bottleneck layer)
+        drop_rate (float) - dropout rate after each dense layer
+        num_classes (int) - number of classification classes
+        memory_efficient (bool) - If True, uses checkpointing. Much more memory efficient,
+          but slower. Default: *False*. See `"paper" <https://arxiv.org/pdf/1707.06990.pdf>`_.
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 1,
+        growth_rate: int = 32,
+        block_config: Tuple[int, int, int, int] = (6, 12, 24, 16),
+        num_init_features: int = 64,
+        bn_size: int = 4,
+        drop_rate: float = 0,
+        num_classes: int = 1000,
+        memory_efficient: bool = False,
+    ) -> None:
+
         super().__init__()
-        # 设置瓶颈层的调节通道数
-        if bottleneck:
-            bottleneck *= growth_rate
-        # 原文献中提到，如果模型是 DenseNet-BC，则初始通道数是2k，否则是16
-        if bottleneck and compression < 1:
-            init_input_channel = 2*growth_rate
-        else:
-            init_input_channel = 16
-        if dataset != 'ImageNet':
-            # 输入为3*32*32，输出为(16 or 2k)*32*32
-            conv1 = nn.Conv2d(input_channels, init_input_channel, kernel_size=1, stride=1, padding=0, bias=False)
-            # 这里不需要池化层
-            self.densenet = nn.Sequential(conv1)
-            # 根据配置列表，创建DenseLayer
-            for i,num_layers in enumerate(denselayer_config):
-                if i == 0:
-                    num_input_chennel = init_input_channel
-                else:
-                    num_input_chennel = compression * num_input_chennel
-                dense = DenseLayer(num_input_chennel=num_input_chennel,num_layers=num_layers,growth_rate=growth_rate,drop_rate=drop_rate,bottleneck = bottleneck)
-                self.densenet.add_module(f"DenseLayer{(i + 1)}", dense)
 
-                num_input_chennel += num_layers * growth_rate
-                # 最后的DenseLayer后面不需要过渡层   
-                if i != len(denselayer_config) - 1:
-                    trans = Transition(num_input_chennel=num_input_chennel, theta = compression)
-                    self.densenet.add_module(f"TransitionLayer{(i + 1)}", trans)
-                # 如果是输入的是32*32尺寸的图片，经过4层DenseLayers后，最终输出大小为4*4
-        else:
-            # 输入为3*224*224，输出为(16 or 2k)*112*112
-            conv1 = nn.Conv2d(input_channels, init_input_channel, kernel_size=7, stride=2, padding=3, bias=False)
-            # 输入为(16 or 2k)*112*112，输出为(16 or 2k)*56*56
-            pooling1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-            self.densenet = nn.Sequential(conv1, pooling1)
+        # First convolution
+        self.features = nn.Sequential(
+            OrderedDict(
+                [
+                    ("conv0", nn.Conv2d(3, num_init_features, kernel_size=7, stride=2, padding=3, bias=False)),
+                    ("norm0", nn.BatchNorm2d(num_init_features)),
+                    ("relu0", nn.ReLU(inplace=True)),
+                    ("pool0", nn.MaxPool2d(kernel_size=3, stride=2, padding=1)),
+                ]
+            )
+        )
 
-            for i,num_layers in enumerate(denselayer_config):
-                if i == 0:
-                    num_input_chennel = init_input_channel
-                else:
-                    num_input_chennel = compression * num_input_chennel
-                dense = DenseLayer(num_input_chennel=num_input_chennel,num_layers=num_layers,growth_rate=growth_rate,drop_rate=drop_rate,bottleneck = bottleneck)
-                self.densenet.add_module(f"DenseLayer{(i + 1)}", dense)
+        # Each denseblock
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            block = DenseBlock(
+                num_layers=num_layers,
+                num_input_features=num_features,
+                bn_size=bn_size,
+                growth_rate=growth_rate,
+                drop_rate=drop_rate,
+                memory_efficient=memory_efficient,
+            )
+            self.features.add_module("denseblock%d" % (i + 1), block)
+            num_features = num_features + num_layers * growth_rate
+            if i != len(block_config) - 1:
+                trans = Transition(num_input_features=num_features, num_output_features=num_features // 2)
+                self.features.add_module("transition%d" % (i + 1), trans)
+                num_features = num_features // 2
 
-                num_input_chennel += num_layers * growth_rate
-                 
-                if i != len(denselayer_config) - 1:
-                    trans = Transition(num_input_chennel=num_input_chennel, theta = compression)
-                    self.densenet.add_module(f"TransitionLayer{(i + 1)}", trans)
-                # 如果是输入的是224*224尺寸的图片，经过4层DenseLayers后，最终输出大小为7*7
-        
-        # 全局池化为1*1大小的张量
-        self.global_pooling = nn.AdaptiveAvgPool2d(1)
-        # 去掉后两个维度
-        self.flatten = nn.Flatten()
-        # 两层的MLP
-        self.class_conv = nn.Linear(in_features=int(num_input_chennel),out_features=256,bias=True)
-        self.acti = nn.ReLU()
-        self.linear = nn.Linear(in_features=256, out_features=out_features,bias=True)   
+        # Final batch norm
+        self.features.add_module("norm5", nn.BatchNorm2d(num_features))
 
-        # 随机初始化模型参数
+        # Linear layer
+        self.classifier = nn.Linear(num_features, num_classes)
+
+        # Official init from torch repo.
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight)
@@ -142,8 +195,23 @@ class DenseNets(nn.Module):
             elif isinstance(m, nn.Linear):
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self,x):
-        x = self.densenet(x)
-        # print(x.shape)
-        x = self.linear(self.acti(self.class_conv(self.flatten(self.global_pooling(x)))))
-        return x
+    def forward(self, x: Tensor) -> Tensor:
+        features = self.features(x)
+        out = F.relu(features, inplace=True)
+        out = F.adaptive_avg_pool2d(out, (1, 1))
+        out = torch.flatten(out, 1)
+        out = self.classifier(out)
+        return out
+
+
+if __name__ == '__main__':
+    input_size = (1, 3, 512, 512)
+    model = DenseNet(in_channels=3) 
+    summary(model, 
+            input_size=input_size,
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
+            row_settings=['var_names'], 
+            verbose=True
+            )
+

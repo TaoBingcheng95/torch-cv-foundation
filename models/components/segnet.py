@@ -81,10 +81,11 @@ class SegNet(nn.Module):
                 x = layer(x)
         
         return x
+
+
 if __name__ == '__main__':
     num_classes = 21
     model = SegNet(in_channels=3, out_channels=num_classes)  # For a single-channel output (e.g., binary segmentation)
-    print(model)
     
     x = torch.randn((1, 3, 256, 256))  # Example input tensor (batch_size, channels, height, width)
     output = model(x)

@@ -72,8 +72,8 @@ class WHDLDDataset(Dataset):
         self.root = root
         self.dataset_name = 'WHDLD'
         self.transform = transform
-        self.num_classes = 6 # 1-6 in original data
-        self.classes = ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
+        # self.num_classes = 6 # 1-6 in original data
+        # self.classes = ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
         self.images = glob(os.path.join(self.root, img_folder, '*.jpg'))
         self.masks = glob(os.path.join(self.root, label_folder, '*.png'))
         self.images.sort()
@@ -84,6 +84,24 @@ class WHDLDDataset(Dataset):
     def __len__(self):
         return len(self.masks)
 
+    @property
+    def num_classes(self) -> int:
+        """
+        Get the number of classes.
+        calss is is 1-6 in original WHDLD mask
+
+        :return: The number of WHDLD classes (6).
+        """
+        return 6
+
+    @property
+    def dict_classes(self) -> int:
+        """
+        Get the text for classes id.
+
+        :return: The list of WHDLD classes (6).
+        """
+        return ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
 
     def __getitem__(self, idx):
         mask_arr = np.array(Image.open(self.masks[idx]))
@@ -129,16 +147,34 @@ class JiageDataset(Dataset):
         self.root = root
         self.dataset_name = 'Jiage_Building'
         self.transform = transform
-        self.num_classes = 2
-        self.classes = ['background', 'building']
+        # self.num_classes = 2
+        # self.classes = ['background', 'building']
         self.masks = glob(os.path.join(self.root, 'mask','*.tif'))
         # self.images = glob(os.path.join(self.root, 'image','*.tif'))
         self.images = [i.replace('mask', 'image') for i in self.masks]
-        
-    
+
     
     def __len__(self):
         return len(self.masks)
+
+
+    @property
+    def num_classes(self) -> int:
+        """
+        Get the number of classes.
+
+        :return: The number of Jiage classes (2).
+        """
+        return 2
+
+    @property
+    def dict_classes(self) -> int:
+        """
+        Get the text for classes id.
+
+        :return: The list of Jiage classes (2).
+        """
+        return ['background', 'building']
 
     def __getitem__(self, idx):
         mask_arr = np.array(Image.open(self.masks[idx]))
@@ -186,8 +222,27 @@ class TianchiDataset(Dataset):
         # self.images = glob(os.path.join(self.root, img_folder, '*.jpg'))
         # self.images.sort()
         # self.masks.sort()
-        self.classes = ['background', 'building']
-        self.num_classes = 2
+        # self.classes = ['background', 'building']
+        # self.num_classes = 2
+
+
+    @property
+    def num_classes(self) -> int:
+        """
+        Get the number of classes.
+
+        :return: The number of Tianchi classes (2).
+        """
+        return 2
+
+    @property
+    def dict_classes(self) -> int:
+        """
+        Get the text for classes id.
+
+        :return: The list of Tianchi classes (2).
+        """
+        return ['background', 'building']
 
     def __len__(self):
         return len(self.images)

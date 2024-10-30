@@ -59,3 +59,12 @@ class FCN(Module):
         x = self.backbone(x)
         x = self.last(x)
         return x
+
+
+if __name__ == "__main__":
+    import torch
+
+    model = FCN(4, 2)
+    x = torch.randn(1, 4, 256, 256)
+    y = model(x)
+    print(y.shape)

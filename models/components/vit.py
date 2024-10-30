@@ -84,5 +84,11 @@ if __name__ == "__main__":
     output = model(x)
     print(output.shape)
 
-    # summary(model, input_size=(1, 3, 512, 512))
+    summary(model, 
+            input_size=input_size, 
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
+            row_settings=['var_names'], 
+            verbose=True
+            )
     

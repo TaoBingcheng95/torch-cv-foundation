@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
@@ -31,6 +32,7 @@ class BasicBlock(nn.Module):
 
         return out
 
+
 class HRNetStage(nn.Module):
     def __init__(self, in_channels, out_channels, num_blocks):
         super(HRNetStage, self).__init__()
@@ -48,6 +50,7 @@ class HRNetStage(nn.Module):
 
     def forward(self, x):
         return self.blocks(x)
+
 
 class HRNet(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -80,6 +83,7 @@ class HRNet(nn.Module):
         x = F.interpolate(x, size=shape, mode='bilinear', align_corners=False)
 
         return x
+
 
 # 示例测试
 if __name__ == "__main__":

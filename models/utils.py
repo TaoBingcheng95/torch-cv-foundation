@@ -197,5 +197,5 @@ def modify_resnet(model,in_channels=3):
                                 stride=original_conv1.stride, 
                                 padding=original_conv1.padding, 
                                 bias=original_conv1.bias is not None)
-    model.resnet18() = backbone
+    # model.resnet18() = backbone
     return backbone

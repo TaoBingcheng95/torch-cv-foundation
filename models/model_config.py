@@ -21,8 +21,8 @@ except ImportError:
 import segmentation_models_pytorch as smp
 import timm
 
-from models.components import FCN
-from models import utils
+from components import FCN
+from models.utils import extract_backbone, load_state_dict, modify_resnet
 # from models.components import get_weight
 
 
@@ -131,7 +131,7 @@ def SemanticSegmentationModel(model: str ="unet",
             if isinstance(weights, WeightsEnum):
                 state_dict = weights.get_state_dict(progress=True)
             elif os.path.exists(weights):
-                _, state_dict = utils.extract_backbone(weights)
+                _, state_dict = extract_backbone(weights)
             else:
                 pass
                 # state_dict = get_weight(weights).get_state_dict(progress=True)
@@ -193,11 +193,11 @@ def ClassificationModel(model: str = 'resnet50',
         if isinstance(weights, WeightsEnum):
             state_dict = weights.get_state_dict(progress=True)
         elif os.path.exists(weights):
-            _, state_dict = utils.extract_backbone(weights)
+            _, state_dict = extract_backbone(weights)
         else:
             pass
             # state_dict = get_weight(weights).get_state_dict(progress=True)
-        utils.load_state_dict(cls_model, state_dict)
+        load_state_dict(cls_model, state_dict)
 
     # Freeze backbone and unfreeze classifier head
     if freeze_backbone:

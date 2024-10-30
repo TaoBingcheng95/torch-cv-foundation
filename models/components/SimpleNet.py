@@ -50,6 +50,35 @@ class SegmentationHead(nn.Module):
         return self.layer(x)
 
 
+class ModernDenseNet(nn.Module):
+    def __init__(
+        self,
+        input_size: int = 784,
+        hidden_size: int = 256,
+        output_size: int = 10,
+        segmentation_output_size: int = 784
+    ) -> None:
+        super().__init__()
+
+        self.encoder = Encoder(input_size, hidden_size)
+        self.decoder = Decoder(hidden_size, hidden_size)
+        self.classification_head = ClassificationHead(hidden_size, output_size)
+        self.segmentation_head = SegmentationHead(hidden_size, segmentation_output_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, width, height = x.size()
+        x = x.view(batch_size, -1)
+
+        x = self.encoder(x)
+        x = self.decoder(x)
+
+        # Determine the task based on the shape of the input
+        if x.size(1) == 784:  # Assume 784 indicates a segmentation task
+            return self.segmentation_head(x)
+        else:
+            return self.classification_head(x)
+
+
 class SimpleDenseNet(nn.Module):
     """A simple fully-connected neural net for computing predictions."""
 
@@ -83,8 +112,8 @@ class SimpleDenseNet(nn.Module):
             nn.ReLU(),
             nn.Linear(lin2_size, lin3_size),
             nn.BatchNorm1d(lin3_size),
+            
             nn.ReLU(),
-
             nn.Linear(lin3_size, output_size),
         )
 
@@ -95,40 +124,10 @@ class SimpleDenseNet(nn.Module):
         :return: A tensor of predictions.
         """
         batch_size, channels, width, height = x.size()
-
         # (batch, 1, width, height) -> (batch, 1*width*height)
         x = x.view(batch_size, -1)
-
         return self.model(x)
 
-
-class ModernDenseNet(nn.Module):
-    def __init__(
-        self,
-        input_size: int = 784,
-        hidden_size: int = 256,
-        output_size: int = 10,
-        segmentation_output_size: int = 784
-    ) -> None:
-        super().__init__()
-
-        self.encoder = Encoder(input_size, hidden_size)
-        self.decoder = Decoder(hidden_size, hidden_size)
-        self.classification_head = ClassificationHead(hidden_size, output_size)
-        self.segmentation_head = SegmentationHead(hidden_size, segmentation_output_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, channels, width, height = x.size()
-        x = x.view(batch_size, -1)
-
-        x = self.encoder(x)
-        x = self.decoder(x)
-
-        # Determine the task based on the shape of the input
-        if x.size(1) == 784:  # Assume 784 indicates a segmentation task
-            return self.segmentation_head(x)
-        else:
-            return self.classification_head(x)
 
 
 ########################################
@@ -267,18 +266,18 @@ class UNetDecoder(nn.Module):
         return dec4
 
 
-class UNetTaskHead(nn.Module):
+class UNetSegmentationTaskHead(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(UNetTaskHead, self).__init__()
+        super(UNetSegmentationTaskHead, self).__init__()
         self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
         return self.final_conv(x)
 
 
-class UNetClassificationHead(nn.Module):
+class UNetClassificationTaskHead(nn.Module):
     def __init__(self, in_channels, num_classes):
-        super(UNetClassificationHead, self).__init__()
+        super(UNetClassificationTaskHead, self).__init__()
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(in_channels, num_classes)
 
@@ -290,12 +289,12 @@ class UNetClassificationHead(nn.Module):
 
 
 class SimpleUNet(nn.Module):
-    def __init__(self, in_channels, out_channels, num_classes):
+    def __init__(self, in_channels=3, num_classes=10):
         super(SimpleUNet, self).__init__()
         self.encoder = UNetEncoder(in_channels)
         self.decoder = UNetDecoder()
-        self.task_head = UNetTaskHead(128, out_channels)
-        self.classification_head = UNetClassificationHead(1024, num_classes)  # 分类头输入通道数为1024
+        self.task_head = UNetSegmentationTaskHead(128, num_classes)
+        self.classification_head = UNetClassificationTaskHead(1024, num_classes)  # 分类头输入通道数为1024
 
     def forward(self, x):
         enc1, enc2, enc3, enc4, bottleneck = self.encoder(x)
@@ -306,25 +305,59 @@ class SimpleUNet(nn.Module):
 
 
 
-if __name__ == "__main__":
+def unet_demo():
+    input_size = (1, 3, 512, 512)
+    model = SimpleUNet(in_channels=3, num_classes=5) 
+    # input_data = torch.randn(input_size)
+    # output = model(input_data)
+    # print(output.shape)
+    summary(model, 
+            input_size=input_size,
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
+            row_settings=['var_names'], 
+            verbose=True
+            )
 
-    # model = SimpleDenseNet()
-    model = ModernDenseNet()
+def densenet_demo():
     input_size = (1, 1, 28, 28)
-    summary(model, input_size=input_size)
+    model = ModernDenseNet()
+    model.eval()
+    input_data = torch.randn(input_size)
+    output = model(input_data)
+    print(output.shape)
+    # summary(model, 
+    #         input_size=input_size,
+    #         col_width=20,
+    #         col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
+    #         row_settings=['var_names'], 
+    #         verbose=True
+    #         )
+
+
+
+if __name__ == "__main__":
+    # unet_demo()
+
+    densenet_demo()
+
+    # # model = SimpleDenseNet()
+    # model = ModernDenseNet()
+    # input_size = (1, 1, 28, 28)
+    # summary(model, input_size=input_size)
 
     # model.eval()
     # inputs = torch.randn(input_size)
     # output = model(inputs)
     # print(output.shape)
 
-    input_size = (1, 3, 512, 512)
-    model = SimpleUNet(3, 1, num_classes=2) # 3个输入通道（RGB图像），1个输出通道（二分类）
+    # input_size = (1, 3, 512, 512)
+    # model = SimpleUNet(3, 1, num_classes=2) # 3个输入通道（RGB图像），1个输出通道（二分类）
 
-    summary(model, input_size=input_size)
+    # summary(model, input_size=input_size)
 
-    # inputs = torch.randn(input_size)
-    # output = model(inputs)
-    # print(inputs.shape, ' -> ', output.shape)
+    # # inputs = torch.randn(input_size)
+    # # output = model(inputs)
+    # # print(inputs.shape, ' -> ', output.shape)
 
 

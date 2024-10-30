@@ -1,3 +1,6 @@
+# from functools import partial
+# transforms=partial(ImageClassification, crop_size=224),
+import os
 import sys
 from pprint import pprint
 import numpy as np
@@ -7,7 +10,7 @@ import matplotlib.pyplot as plt
 
 import torch.onnx
 
-from dataset.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
+from dataset.components.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
 from models.components import SimpleUNet, UNet
 from trainers import BaseTrainer
 from transforms.transforms import train_transform
@@ -87,7 +90,8 @@ if __name__ == '__main__':
                      epochs=20,
                      compile=False # compile model for faster training with pytorch 2.0
                      )
-    tt.fit()
+    print(tt.save_dir)
+    # tt.fit()
     
     # perdict
     x, y = next(iter(test_dl))
@@ -109,4 +113,4 @@ if __name__ == '__main__':
     axis[1].imshow(y[0,:,:])
     axis[2].imshow(preds.cpu().numpy()[0,:,:])
     plt.tight_layout()
-    plt.savefig('test.png')
+    plt.savefig(os.path.join(tt.save_dir,'prediction.png'))

@@ -1,13 +1,16 @@
 # https://arxiv.org/abs/1808.00897
+
 import torch
 import torch.nn as nn
-# import torch.nn.functional as F
-# import torchvision
+import torch.nn.functional as F
+import torchvision
 from torch.nn import BatchNorm2d
-import torchvision.models as models
-from . import resnet# import Resnet18
 
-models.resnet18()
+# from resnet import Resnet18
+from .build_contextpath import build_contextpath
+
+
+
 
 class ConvBNReLU(nn.Module):
 
@@ -117,19 +120,10 @@ class AttentionRefinementModule(nn.Module):
 
 
 class ContextPath(nn.Module):
-    def __init__(self,in_channels, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super(ContextPath, self).__init__()
-        self.resnet = resnet.Resnet18(in_channels)
-        
-        # backbone = models.resnet18()
-        # original_conv1 = backbone.conv1
-        # backbone.conv1 = nn.Conv2d(in_channels, original_conv1.out_channels, 
-        #                            kernel_size=original_conv1.kernel_size,
-        #                            stride=original_conv1.stride, 
-        #                            padding=original_conv1.padding, 
-        #                            bias=original_conv1.bias is not None)
-        # self.resnet = backbone
-        
+        # self.resnet = Resnet18()
+        self.resnet = build_contextpath(name='resnet18') # 
         self.arm16 = AttentionRefinementModule(256, 128)
         self.arm32 = AttentionRefinementModule(512, 128)
         self.conv_head32 = ConvBNReLU(128, 128, ks=3, stride=1, padding=1)
@@ -138,10 +132,10 @@ class ContextPath(nn.Module):
         self.up32 = nn.Upsample(scale_factor=2.)
         self.up16 = nn.Upsample(scale_factor=2.)
 
-        # self.init_weight()
+        self.init_weight()
 
     def forward(self, x):
-        feat8, feat16, feat32 = self.resnet(x)
+        feat8, feat16, feat32,_ = self.resnet(x)
 
         avg = torch.mean(feat32, dim=(2, 3), keepdim=True)
         avg = self.conv_avg(avg)
@@ -177,9 +171,9 @@ class ContextPath(nn.Module):
 
 
 class SpatialPath(nn.Module):
-    def __init__(self, in_channels=3,*args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super(SpatialPath, self).__init__()
-        self.conv1 = ConvBNReLU(in_channels, 64, ks=7, stride=2, padding=3)
+        self.conv1 = ConvBNReLU(3, 64, ks=7, stride=2, padding=3)
         self.conv2 = ConvBNReLU(64, 64, ks=3, stride=2, padding=1)
         self.conv3 = ConvBNReLU(64, 64, ks=3, stride=2, padding=1)
         self.conv_out = ConvBNReLU(64, 128, ks=1, stride=1, padding=0)
@@ -271,22 +265,20 @@ class FeatureFusionModule(nn.Module):
 
 class BiSeNetV1(nn.Module):
 
-    def __init__(self, in_channels, n_classes, aux_mode='train', init_weight=False, *args, **kwargs):
+    def __init__(self, n_classes, aux_mode='train', *args, **kwargs):
         super(BiSeNetV1, self).__init__()
-        self.cp = ContextPath(in_channels=in_channels)
-        self.sp = SpatialPath(in_channels=in_channels)
+        self.cp = ContextPath()
+        self.sp = SpatialPath()
         self.ffm = FeatureFusionModule(256, 256)
         self.conv_out = BiSeNetOutput(256, 256, n_classes, up_factor=8)
         self.aux_mode = aux_mode
         if self.aux_mode == 'train':
             self.conv_out16 = BiSeNetOutput(128, 64, n_classes, up_factor=8)
             self.conv_out32 = BiSeNetOutput(128, 64, n_classes, up_factor=16)
-        if init_weight: 
-            self.init_weight()
+        self.init_weight()
 
     def forward(self, x):
-        # H, W = x.size()[2:]
-        B, C, H, W = x.size()
+        H, W = x.size()[2:]
         feat_cp8, feat_cp16 = self.cp(x)
         feat_sp = self.sp(x)
         feat_fuse = self.ffm(feat_sp, feat_cp8)
@@ -325,12 +317,13 @@ class BiSeNetV1(nn.Module):
 
 
 if __name__ == "__main__":
-    model = BiSeNetV1(n_classes=6)  # For a single-channel output (e.g., binary segmentation)
+    model = BiSeNetV1(n_classes=2)  # For a single-channel output (e.g., binary segmentation)
     # print(model)
+    model.eval()
 
     input_size = (1, 3, 512, 512)
     x = torch.randn(input_size)  # Example input tensor (batch_size, channels, height, width)
     # summary(model, input_size=(1, 3, 512, 512))
     output = model(x)
-    print(output.shape)  # Should be (1, 1, 256, 256) for this example
+    print(output[0].shape)  # Should be (1, 1, 256, 256) for this example
 

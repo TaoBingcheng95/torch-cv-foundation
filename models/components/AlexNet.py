@@ -3,10 +3,11 @@ import torch.nn as nn
 
 
 class AlexNet(nn.Module):
-    def __init__(self, num_classes: int = 1000, dropout: float = 0.5, init_weights: bool = False) -> None:
+    def __init__(self, in_channels: int = 3, num_classes: int = 1000, dropout: float = 0.5, init_weights: bool = False) -> None:
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            # nn.Conv2d(in_channels, 64, kernel_size=11, stride=4, padding=2),
+            nn.Conv2d(in_channels, 64, kernel_size=5, stride=1, padding=0),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2),
             nn.Conv2d(64, 192, kernel_size=5, padding=2),
@@ -55,6 +56,18 @@ class AlexNet(nn.Module):
 if __name__ == '__main__':
     try:
         from torchinfo import summary
-        summary(AlexNet(), input_size=(1, 3, 224, 224))
+        model = AlexNet(in_channels=1, num_classes=10)
+        input_size=(1, 1, 32, 32)
+        input_data = torch.randn(input_size)
+        output = model(input_data)
+        # print(output.shape)
+
+        summary(model, 
+                input_size=input_size,
+                col_width=20,
+                col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
+                row_settings=['var_names'], 
+                verbose=True
+                )
     except ImportError as e:
         print(e)

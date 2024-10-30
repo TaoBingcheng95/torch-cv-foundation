@@ -2,9 +2,9 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 
-from ..components.AlexNet import AlexNet
+from components import AlexNet
 
 
 class AlexNetLightning(pl.LightningModule):

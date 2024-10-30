@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import timm
 
+
 class ASPP(nn.Module):
     def __init__(self, in_channels, out_channels, atrous_rates):
         super(ASPP, self).__init__()
@@ -29,6 +30,7 @@ class ASPP(nn.Module):
         x = self.bn1(x)
         x = self.relu(x)
         return x
+
 
 class Decoder(nn.Module):
     def __init__(self, low_level_inplanes, num_classes):
@@ -105,6 +107,7 @@ class DeepLabV3Plus(nn.Module):
         x = self.decoder(x, low_level_features)
         x = nn.functional.interpolate(x, size=shape, mode='bilinear', align_corners=False)
         return x
+
 
 if __name__ == '__main__':
     num_classes = 21

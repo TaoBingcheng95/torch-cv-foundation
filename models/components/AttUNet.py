@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-# @Time    : 2024/8/27 0:09
-# @Author  : xuxing
-# @Site    : 
-# @File    : attunet.py
-# @Software: PyCharm
 
 import torch
 import torch.nn as nn
@@ -126,11 +120,11 @@ class UNet(nn.Module):
 
 
 if __name__ == "__main__":
-    model = UNet(in_channels=3, out_channels=2, use_attention=False)  # For a single-channel output (e.g., binary segmentation)
-    # print(model)
-
+    # For a single-channel output (e.g., binary segmentation)
+    model = UNet(in_channels=3, out_channels=2, use_attention=True)  
+    # Example input tensor (batch_size, channels, height, width)
     input_size = (1, 3, 512, 512)
-    x = torch.randn(input_size)  # Example input tensor (batch_size, channels, height, width)
-    # summary(model, input_size=(1, 3, 512, 512))
+    x = torch.randn(input_size)  
     output = model(x)
-    print(output.shape)  # Should be (1, 1, 256, 256) for this example
+    print(output.shape)  # Should be (1, 2, 512, 512) for this example
+    summary(model, input_size)

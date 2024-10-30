@@ -1,1 +1,2 @@
-from .base import BaseSegmentationDataset
+from .components.base import BaseSegmentationDataset
+from .mnist_datamodule import MNISTDataModule

@@ -2,7 +2,7 @@ import onnxruntime as ort
 import numpy as np
 from matplotlib import pyplot as plt
 
-from dataset.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
+from dataset.components.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
 
 
 def inference_onnx(onnx_fn, x, y, plot=False):
