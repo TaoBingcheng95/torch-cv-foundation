@@ -1,16 +1,21 @@
 from typing import Any, Dict, Optional, Tuple
-
+import sys
+import os
+import numpy as np
+import matplotlib.pyplot as plt
 import torch
 from lightning.pytorch import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
-from torchvision.datasets import MNIST
 from torchvision.transforms import transforms
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-_DEFAULT_MNIST_BATCH_SIZE = 32
-_DEFAULT_RESIZE_SIZE = 32
+from .components import TianchiDataset
 
 
-class MNISTDataModule(LightningDataModule):
+
+
+class TianchiDataModule(LightningDataModule):
     """
     `LightningDataModule` for the MNIST dataset.
 
@@ -58,15 +63,14 @@ class MNISTDataModule(LightningDataModule):
 
     def __init__(
         self,
-        data_dir: str = "data/",
-        train_val_test_split: Tuple[int, int, int] = (55_000, 5_000, 10_000),
+        root: str = "data/",
+        train_val_test_split: Tuple[float, float, float] = (0.4,0.4,0.2),
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
-        resize_32=False
     ) -> None:
         """
-        Initialize a `MNISTDataModule`.
+        Initialize a `TianchiDataModule`.
 
         :param data_dir: The data directory. Defaults to `"data/"`.
         :param train_val_test_split: The train, validation and test split. Defaults to `(55_000, 5_000, 10_000)`.
@@ -81,32 +85,56 @@ class MNISTDataModule(LightningDataModule):
         self.save_hyperparameters(logger=False)
 
         # data transformations
-        if resize_32:
-            self.transforms = transforms.Compose(
-                [transforms.ToTensor(),
-                 transforms.Resize((_DEFAULT_RESIZE_SIZE, _DEFAULT_RESIZE_SIZE)),
-                 transforms.Normalize((0.1307,), (0.3081,))]
-            )
-        else:
-            self.transforms = transforms.Compose(
-                [transforms.ToTensor(),
-                 transforms.Normalize((0.1307,), (0.3081,))]
-            )
+        # self.transforms = transforms.Compose(
+        #     [
+        #      transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        #      transforms.ToTensor()
+        #      ]
+        #      )
+        self.transforms = A.Compose([
+            A.HorizontalFlip(p=0.5),  # 随机水平翻转
+            A.RandomCrop(width=256, height=256),  # 随机裁剪
+            A.RandomBrightnessContrast(p=0.2),  # 随机亮度对比度
+            A.HueSaturationValue(p=0.2),  # 随机色调饱和度
+            A.Rotate(limit=35, p=0.5),  # 随机旋转
+            A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),  # 高斯噪声
+            # A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),  # 归一化
+            ToTensorV2()  # 转换为PyTorch张量
+            ]) # , additional_targets={'mask': 'mask'}
 
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
         self.data_test: Optional[Dataset] = None
 
         self.batch_size_per_device = batch_size
+        # self.init_num_workers()
 
     @property
     def num_classes(self) -> int:
         """
         Get the number of classes.
 
-        :return: The number of MNIST classes (10).
+        :return: The number of Tianchi classes (2).
         """
-        return 10
+        return 2
+
+    @property
+    def dict_classes(self) -> int:
+        """
+        Get the text for classes id.
+
+        :return: The list of Tianchi classes (2).
+        """
+        return ['background', 'building']
+
+    
+    def init_num_workers(self) -> int:
+        if sys.platform.startswith('win'):
+            self.num_workers = 0
+        else:
+            pass
+            # num_workers = 4
+
 
     def prepare_data(self) -> None:
         """
@@ -117,8 +145,7 @@ class MNISTDataModule(LightningDataModule):
 
         Do not use it to assign state (self.x = y).
         """
-        MNIST(self.hparams.data_dir, train=True, download=True)
-        MNIST(self.hparams.data_dir, train=False, download=True)
+        TianchiDataset(self.hparams.root)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """
@@ -141,14 +168,13 @@ class MNISTDataModule(LightningDataModule):
 
         # load and split datasets only if not loaded already
         if not self.data_train and not self.data_val and not self.data_test:
-            trainset = MNIST(self.hparams.data_dir, train=True, transform=self.transforms)
-            testset = MNIST(self.hparams.data_dir, train=False, transform=self.transforms)
-            dataset = ConcatDataset(datasets=[trainset, testset])
+            dataset = TianchiDataset(self.hparams.root)
             self.data_train, self.data_val, self.data_test = random_split(
                 dataset=dataset,
                 lengths=self.hparams.train_val_test_split,
                 generator=torch.Generator().manual_seed(42),
             )
+            self.data_train.transforms = self.transforms
 
     def train_dataloader(self) -> DataLoader[Any]:
         """
@@ -231,7 +257,31 @@ class MNISTDataModule(LightningDataModule):
         :param state_dict: The datamodule state returned by `self.state_dict()`.
         """
         pass
+    
+    def plot(self, save=True, plot=False, cmap='gray', save_dir='./'):
+        
+        x, y = next(iter(self.train_dataloader()))
+        B,C,H,W = x.shape
+        if B>4:
+            B = 4
+            print('Too many samples, only plot 4 samples.')
+        
+        fig, axis = plt.subplots(2, B)
+        for idx in range(B):
+            axis[0][idx].imshow(x[idx].permute(1, 2, 0))
+            axis[1][idx].imshow(y[idx], cmap=cmap)
+            axis[0][idx].axis('off')
+            axis[1][idx].axis('off')
+        plt.tight_layout()
+        if save:
+            plt.savefig(os.path.join(save_dir,'sample.png'))
+        if plot:
+            try:
+                plt.show()
+            except:
+                pass
+        plt.close()
 
 
 if __name__ == "__main__":
-    _ = MNISTDataModule()
+    _ = TianchiDataset()

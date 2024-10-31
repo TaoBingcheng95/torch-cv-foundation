@@ -11,7 +11,7 @@ class MNISTLoader:
 
         # 定义数据的预处理变换(归一化)
         transform = transforms.Compose([
-            # transforms.Resize(size=224),    #图像大小设为224
+            transforms.Resize(size=32),    #图像大小设为32
             transforms.ToTensor(),  # 将图像转换为Tensor格式
             # transforms.Normalize((0.5,), (0.5,))  # 对图像进行标准化，使像素值在[-1, 1]之间
         ])
@@ -223,7 +223,7 @@ class CIFAR10Loader:
 
 
 if __name__ == '__main__':
-    dataset = CIFAR10Loader(root='../data', train=True)
+    dataset = MNISTLoader(root='/home/tbc/workspace/dl_template/data')
     x, y = dataset.train_ds[0]
     print(x.shape, y)
     dataset.plot_sample()

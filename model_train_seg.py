@@ -8,14 +8,8 @@ from torch.utils.data import DataLoader, random_split
 import segmentation_models_pytorch as smp
 import matplotlib.pyplot as plt
 
-import torch.onnx
-
 from dataset.components.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
-from models.components import SimpleUNet, UNet
 from trainers import BaseTrainer
-from transforms.transforms import train_transform
-from metrics import Metrics
-
 
 if __name__ == '__main__':
 

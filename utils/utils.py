@@ -10,7 +10,8 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 
 def extras(cfg: DictConfig) -> None:
-    """Applies optional utilities before the task is started.
+    """
+    Applies optional utilities before the task is started.
 
     Utilities:
         - Ignoring python warnings
@@ -41,7 +42,8 @@ def extras(cfg: DictConfig) -> None:
 
 
 def task_wrapper(task_func: Callable) -> Callable:
-    """Optional decorator that controls the failure behavior when executing the task function.
+    """
+    Optional decorator that controls the failure behavior when executing the task function.
 
     This wrapper can be used to:
         - make sure loggers are closed even if the task function raises an exception (prevents multirun failure)

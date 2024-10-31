@@ -1,12 +1,14 @@
 import os
 from glob import glob
+from typing import List, Annotated, Any, Callable, Union, cast
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 
-from .base import BaseSegmentationDataset
+# from .base import BaseSegmentationDataset
+from . import BaseSegmentationDataset
 
 
 class NAIPDataset(BaseSegmentationDataset):
@@ -18,46 +20,66 @@ class NAIPDataset(BaseSegmentationDataset):
         self.masks = glob(os.path.join(self.root, label_folder, '*.tif'))
         self.images.sort()
         self.masks.sort()
-        self.num_classes = 7
+        # self.num_classes = 7
+
+    @property
+    def num_classes(self) -> int:
+        """
+        Get the number of classes.
+        calss is is 1-6 in original NAIP mask
+
+        :return: The number of WHDLD classes (6).
+        """
+        return 6
+
+    @property
+    def dict_classes(self) -> int:
+        """
+        Get the text for classes id.
+
+        :return: The list of WHDLD classes (6).
+        """
+        return ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
 
 
-    def __getitem__(self, idx):
-        image_path = self.images[idx]
-        mask_path = self.masks[idx]
-        image = np.asarray(Image.open(image_path))
-        if self.band_reversal:
-            image = image[:, :, ::-1]
-        image = image.transpose((2, 0, 1)).astype(np.float32)
-        mask = np.array(Image.open(mask_path)).astype(np.int64)
-        # mask = np.expand_dims(mask, 0)
-        return image, mask
 
-    def plot(self, idx=None, save=True, cmap='gray'): # viridis
-        # assert 0<=idx < len(self), "Index out of range"
-        if idx is None:
-            idx = np.random.randint(0, len(self))
-        else:
-            if not (0 <= idx < len(self)):
-                raise IndexError("Index out of range")
+    # def __getitem__(self, idx):
+    #     image_path = self.images[idx]
+    #     mask_path = self.masks[idx]
+    #     image = np.asarray(Image.open(image_path))
+    #     if self.band_reversal:
+    #         image = image[:, :, ::-1]
+    #     image = image.transpose((2, 0, 1)).astype(np.float32)
+    #     mask = np.array(Image.open(mask_path)).astype(np.int64)
+    #     # mask = np.expand_dims(mask, 0)
+    #     return image, mask
 
-        img, mask = self.__getitem__(idx)
-        img = img.astype(np.uint8)
+    # def plot(self, idx=None, save=True, cmap='gray'): # viridis
+    #     # assert 0<=idx < len(self), "Index out of range"
+    #     if idx is None:
+    #         idx = np.random.randint(0, len(self))
+    #     else:
+    #         if not (0 <= idx < len(self)):
+    #             raise IndexError("Index out of range")
 
-        fig, axis = plt.subplots(1, 2)
+    #     img, mask = self.__getitem__(idx)
+    #     img = img.astype(np.uint8)
 
-        axis[0].set_title('image')
-        axis[0].imshow(img.transpose((1,2,0)))
-        axis[1].set_title('mask')
-        axis[1].imshow(mask.squeeze())
-        plt.tight_layout()
-        try:
-            if save:
-                plt.savefig(f'dataset_{idx}.png')
-            plt.close()
-        finally:
-            plt.show()
+    #     fig, axis = plt.subplots(1, 2)
+
+    #     axis[0].set_title('image')
+    #     axis[0].imshow(img.transpose((1,2,0)))
+    #     axis[1].set_title('mask')
+    #     axis[1].imshow(mask.squeeze())
+    #     plt.tight_layout()
+    #     try:
+    #         if save:
+    #             plt.savefig(f'dataset_{idx}.png')
+    #         plt.close()
+    #     finally:
+    #         plt.show()
         
-        plt.close()
+    #     plt.close()
 
 
 ########################################
@@ -72,14 +94,12 @@ class WHDLDDataset(Dataset):
         self.root = root
         self.dataset_name = 'WHDLD'
         self.transform = transform
-        # self.num_classes = 6 # 1-6 in original data
-        # self.classes = ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
         self.images = glob(os.path.join(self.root, img_folder, '*.jpg'))
         self.masks = glob(os.path.join(self.root, label_folder, '*.png'))
         self.images.sort()
         self.masks.sort()
         self.classes = ['building', 'road', 'pavement', 'vegetation', 'bare soil', 'water']
-        
+        self.num_classes = len(self.classes) # 1-6 in original data 
 
     def __len__(self):
         return len(self.masks)
@@ -92,16 +112,16 @@ class WHDLDDataset(Dataset):
 
         :return: The number of WHDLD classes (6).
         """
-        return 6
+        return self.num_classes
 
     @property
-    def dict_classes(self) -> int:
+    def dict_classes(self) -> List[str]:
         """
         Get the text for classes id.
 
         :return: The list of WHDLD classes (6).
         """
-        return ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
+        return self.classes
 
     def __getitem__(self, idx):
         mask_arr = np.array(Image.open(self.masks[idx]))
@@ -283,10 +303,10 @@ class TianchiDataset(Dataset):
 
 
 if __name__ == '__main__':
-    Tianchi_dir = '/data/tbc/segmentation/naip'
+    NAIP_dir = '/data/tbc/segmentation/naip'
 
-    ds = NAIPDataset(root=Tianchi_dir)
+    ds = NAIPDataset(root=NAIP_dir)
     x, y = next(iter(ds))
     print(x.shape, y.shape)
-    # print(len(ds))
-    # ds.plot()
+    print(len(ds))
+    ds.plot(plot=True)

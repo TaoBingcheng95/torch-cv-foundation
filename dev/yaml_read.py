@@ -5,6 +5,12 @@ import hydra
 from pprint import pprint
 # import lightning as L
 
+import lightning.pytorch as L
+import rootutils
+import torch
+from lightning.pytorch import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.loggers import Logger
+
 from omegaconf import DictConfig
 
 rootutils.setup_root(__file__, indicator=".git", pythonpath=True) # indicator=".project-root"
@@ -73,10 +79,9 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     # log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule = hydra.utils.instantiate(cfg.data)
-    print(type(datamodule))
 
-    # log.info(f"Instantiating model <{cfg.model._target_}>")
-    # model: LightningModule = hydra.utils.instantiate(cfg.model)
+    log.info(f"Instantiating model <{cfg.model._target_}>")
+    model: LightningModule = hydra.utils.instantiate(cfg.model)
 
     # log.info("Instantiating callbacks...")
     # callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
@@ -84,8 +89,8 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # log.info("Instantiating loggers...")
     # logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
 
-    # log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    # trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
+    log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
+    trainer: Trainer = hydra.utils.instantiate(cfg.trainer) # , callbacks=callbacks, logger=logger
 
     # object_dict = {
     #     "cfg": cfg,
@@ -134,15 +139,23 @@ def main(cfg: DictConfig) -> Optional[float]:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     # extras(cfg)
-    print(type(cfg))
+    
+    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    
+    log.info(f"Instantiating model <{cfg.model._target_}>")
+    model: LightningModule = hydra.utils.instantiate(cfg.model)
+    
+    log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
+    trainer: Trainer = hydra.utils.instantiate(cfg.trainer) # , callbacks=callbacks, logger=logger
     
     # print(cfg.paths.root_dir)
     # print(cfg.paths.data_dir)
     # print(cfg.paths.log_dir)
     # print(cfg.paths.output_dir)
     # print(cfg.paths.work_dir)
-    print(cfg.data.data_dir)
-    print(cfg.model.net)
+    #print(cfg.data.data_dir)
+    # pprint(cfg.model)
 
     # # train the model
     # metric_dict, _ = train(cfg)
