@@ -9,8 +9,8 @@ import torchvision
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
-from models.modules import LeNetLitModule
-from dataset.datamodule import MNISTDataModule
+from models import LeNetLitModule
+from dataset import MNISTDataModule
 
 torch.set_float32_matmul_precision('medium') # 'medium' | 'high'
 

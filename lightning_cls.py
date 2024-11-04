@@ -21,9 +21,9 @@ from torchvision import transforms
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
-from dataset.datamodule.mnist_datamodule import MNISTDataModule
+from dataset.mnist_datamodule import MNISTDataModule
 from models.components import SimpleDenseNet
-from models.modules import MNISTLitModule
+from models import MNISTLitModule
 
 torch.set_float32_matmul_precision('medium') # 'medium' | 'high'
 
