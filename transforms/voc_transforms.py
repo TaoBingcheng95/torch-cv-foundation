@@ -4,6 +4,7 @@ import numpy as np
 
 from PIL import Image, ImageOps, ImageFilter
 
+
 class Normalize(object):
     """
     Normalize a tensor image with mean and standard deviation.
@@ -17,7 +18,7 @@ class Normalize(object):
 
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
        #  img, mask = sample
 
         img = np.array(img).astype(np.float32)
@@ -26,7 +27,7 @@ class Normalize(object):
         img -= self.mean
         img /= self.std
 
-        return {'image': img, 'label': mask}
+        return {'image': img, 'mask': mask}
 
 
 class ToTensor(object):
@@ -37,24 +38,24 @@ class ToTensor(object):
         # numpy image: H x W x C
         # torch image: C X H X W
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         img = np.array(img).transpose((2, 0, 1)) # .astype(np.float32)
         mask = np.array(mask)
         img = torch.from_numpy(img)
         mask = torch.from_numpy(mask)
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
 
 
 class RandomHorizontalFlip(object):
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         #img, mask = sample
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
             mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
 
 
 class RandomRotate(object):
@@ -63,25 +64,25 @@ class RandomRotate(object):
 
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         # img, mask = sample
         rotate_degree = random.uniform(-1*self.degree, self.degree)
         img = img.rotate(rotate_degree, Image.BILINEAR)
         mask = mask.rotate(rotate_degree, Image.NEAREST)
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
 
 
 class RandomGaussianBlur(object):
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         # img, mask = sample
         if random.random() < 0.5:
             img = img.filter(ImageFilter.GaussianBlur(
                 radius=random.random()))
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
 
 
 class RandomScaleCrop(object):
@@ -92,7 +93,7 @@ class RandomScaleCrop(object):
 
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         # img, mask = sample
 
         # random scale (short edge)
@@ -119,7 +120,7 @@ class RandomScaleCrop(object):
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
 
 
 class FixScaleCrop(object):
@@ -128,7 +129,7 @@ class FixScaleCrop(object):
 
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         # img, mask = sample
         w, h = img.size
         if w > h:
@@ -146,7 +147,8 @@ class FixScaleCrop(object):
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}
+
 
 class FixedResize(object):
     def __init__(self, size):
@@ -154,7 +156,7 @@ class FixedResize(object):
 
     def __call__(self, sample):
         img = sample['image']
-        mask = sample['label']
+        mask = sample['mask']
         # img, mask = sample
 
         assert img.size == mask.size
@@ -162,4 +164,4 @@ class FixedResize(object):
         img = img.resize(self.size) # , Image.BILINEAR
         mask = mask.resize(self.size) # , Image.NEAREST
 
-        return  {'image': img, 'label': mask}
+        return  {'image': img, 'mask': mask}

@@ -6,7 +6,7 @@ from .AttUNet import UNet
 from .resnet import Resnet18
 from .BiSeNet import BiSeNetV1
 from .SimpleNet import SimpleDenseNet, SimpleUNet
-from .fcn import FCN
+from .SimpleFCN import FCN
 from .DenseNet import DenseNet
 
 __all__ = ['LeNet5',

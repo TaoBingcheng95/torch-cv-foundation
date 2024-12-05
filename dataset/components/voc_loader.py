@@ -5,6 +5,9 @@ import numpy as np
 import cv2
 import urllib.request as urt
 from PIL import Image
+
+import matplotlib.pyplot as plt
+
 from torch.utils.data import Dataset
 from torchvision import transforms
 from torch.utils.data import DataLoader
@@ -81,7 +84,7 @@ class VOCSegmentation(Dataset):
             tr.RandomHorizontalFlip(),
             tr.RandomScaleCrop(base_size=self.crop_size, crop_size=self.crop_size),
             tr.RandomGaussianBlur(),
-            tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            # tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             tr.ToTensor()])
         return composed_transforms(sample)
 
@@ -96,90 +99,22 @@ class VOCSegmentation(Dataset):
         return 'VOC2012(split=' + str(self.split) + ')'
 
 
-class VocSemanticSegDataSet(Dataset):
-    """Build the voc 2007 dataset for segmentation
-    """
-
-    def __init__(self, data_file, transformers=None, train_phase=True, voc=False):
-        super(VocSemanticSegDataSet, self).__init__()
-        if not os.path.isfile(data_file):
-            raise TypeError(f"{data_file} must be file type!!!")
-        self.data_list = [json.loads(x.strip()) for x in open(data_file).readlines()]
-        self.data_indices = [x for x in range(len(self.data_list))]
-        self.train_phase = train_phase
-        self.voc = voc
-        if self.train_phase:
-            random.shuffle(self.data_list)
-
-        if transformers is not None:
-            self.data_aug = transformers
-        else:
-            self.data_aug = None
-
-    def _loadImages(self, line):
-        img_path = line["image_path"]
-        lbl_path = line["label_path"]
-
-        if "http" not in img_path:
-            image = cv2.imread(img_path)
-            label = cv2.imread(lbl_path)
-            # rm 255 border
-            if self.voc:
-                label = self._rm_border(label)
-            else:
-                label = self._make_lbl(label)
-
-        # read oss data
-        else:
-            img_context = urt.urlopen(img_path).read()
-            image = cv2.imdecode(np.asarray(bytearray(img_context), dtype='uint8'), cv2.IMREAD_COLOR)
-
-            lbl_context = urt.urlopen(lbl_path).read()
-            label = cv2.imdecode(np.asarray(bytearray(lbl_context), dtype='uint8'), cv2.IMREAD_COLOR)
-
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        return image, label
-
-    # remove the border 255 from label
-    def _rm_border(self, seg):
-        pe = np.where(seg == 255)
-        seg[pe] = 0
-        return seg
-
-        # make value to label
-
-    def _make_lbl(self, seg):
-        pe = np.where(seg == 255)
-        seg[pe] = 1
-        return seg
-
-    def __getitem__(self, index):
-        for _ in range(10):
-            try:
-                line = self.data_list[index]
-                img, lbl = self._loadImages(line)
-                if self.data_aug is not None:
-                    img, lbl = self.data_aug(img, lbl)
-                return img, lbl
-            except Exception as e:
-                print(f"{self.data_list[index]} have {e} exception!!!")
-                index = random.choice(self.data_indices)
-
-    def __len__(self):
-        return len(self.data_list)
-
-
 if __name__ == '__main__':
 
-    voc_train = VOCSegmentation(base_dir='D:\\myspace\\dataset\\YOLO\\VOC\\VOCdevkit\\VOC2012',
+    voc_train = VOCSegmentation(base_dir='D:\\myspace\\dataset\\VOC\\VOCdevkit\\VOC2012',
                                 split='train')
-    # image, label = next(iter(voc_train))
-    # segmap = decode_segmap(label, dataset='pascal')
-    # fig, axis = plt.subplots(1,2)
-    # axis[0].imshow(image.permute(1,2,0))
-    # axis[1].imshow(segmap)
-    # plt.show()
 
-    dataloader = DataLoader(voc_train, batch_size=4, shuffle=True, num_workers=0)
-    x, y = next(iter(dataloader))
-    print(x.shape, y.shape)
+    image, label = next(iter(voc_train))
+    print(np.unique(label))
+    print(image.shape, label.shape)
+    t = image.permute(1,2,0)
+    print(t.shape)
+    segmap = decode_segmap(label, dataset='pascal')
+    fig, axis = plt.subplots(1,2)
+    axis[0].imshow(image.permute(1,2,0)) #
+    axis[1].imshow(segmap)
+    plt.show()
+
+    # dataloader = DataLoader(voc_train, batch_size=4, shuffle=True, num_workers=0)
+    # x, y = next(iter(dataloader))
+    # print(x.shape, y.shape)
