@@ -1,5 +1,5 @@
 import os
-from dataset.datamodule.mnist_datamodule import MNISTDataModule
+from dataset.mnist_datamodule import MNISTDataModule
 from models.components import SimpleDenseNet
 # from metrics import Metrics
 from trainers import BaseTrainer
@@ -15,10 +15,10 @@ if __name__ == '__main__':
     train_dl = dm.train_dataloader()
     val_dl = dm.val_dataloader()
     test_dl = dm.test_dataloader()
-
-    model = SimpleDenseNet(output_size=dm.num_classes)
-
+    num_calsses = dm.num_classes
+    
     # MNIST_SimpleDenseNet
+    model = SimpleDenseNet(output_size=dm.num_classes)
 
     # optimizer = torch.optim.Adam(model.parameters(),
     #                              lr=1e-3,
@@ -27,22 +27,22 @@ if __name__ == '__main__':
     #                                            mode='min',
     #                                            patience=10,
     #                                            factor=0.1)
-
     # compile model for faster training with pytorch 2.0
-    compile= True
-
+    compile= False
+    resume='checkpoints/MNIST_SimpleDenseNet/epoch_10_valacc_0.9760.pth'
     tt = BaseTrainer(model=model,
                      device='cuda:0',
+                     resume=resume,
                      train_dataloader=train_dl,
-                     # resume='checkpoints/MNIST_SimpleDenseNet/epoch_10_valacc_0.9760.pth',
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
-                     num_classes=10,
                      optimizer_type='sgd',
                      epochs=10,
-                     compile=compile
+                     compile=compile,
+                     num_classes=num_calsses
                      )
-    tt.fit()
+    print(tt.save_dir)
+    # tt.fit()
 
     x, y = next(iter(test_dl))
     pred = tt.predict(x)

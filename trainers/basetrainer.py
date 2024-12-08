@@ -96,6 +96,7 @@ class BaseTrainer(nn.Module):
         self.train_acc_all = []
         self.val_acc_all = []
         self.cnf_matrix = None  # 分类问题
+        self.val_metrics_result = None
         self.cls = cls
         self.writer = None
         self.compile = compile
@@ -136,13 +137,6 @@ class BaseTrainer(nn.Module):
         if self.compile:
             pass
             # self.logger.info('model compile... ')
-            # # # 定义使用的loss和optimizer，这里支持自定义
-            # # self.model.compile(
-            # #     # loss=self.criterion,
-            # #     optimizer=self.optimizer,
-            # #     scheduler=self.scheduler, # None
-            # #     # metrics=['accuracy']
-            # # )
             # try:
             #     self.model = torch.compile(self.model)
             # except RuntimeError as e:
@@ -198,30 +192,25 @@ class BaseTrainer(nn.Module):
         """
 
         best_val_acc = 0.0
-        train_count = len(self.train_loader)
         for epoch in range(self.epochs):
             self.logger.info(f"Epoch {epoch + 1}/{self.epochs}")
+            
             # self.model.train()
-
             # train_loss = 0.0
-            # for batch_idx, batch in tqdm(enumerate(self.train_loader), total=train_count, desc='Training'):
+            # for batch_idx, batch in tqdm(enumerate(self.train_loader), total=self.train_count, desc='Training'):
             #     inputs, targets = batch
             #     inputs = inputs.to(self.device)
             #     targets = targets.to(self.device)
-            #
             #     self.optimizer.zero_grad() # 清零梯度
             #     outputs = self.model(inputs) # 前向传播
             #     loss = self.criterion(outputs, targets) # 计算损失
             #     loss.backward()# 反向传播
             #     self.optimizer.step()# 更新参数
-            #
-            #     train_loss += loss.item() * targets.size(0)
-            #
+            #     train_loss += loss.item()# * targets.size(0)
             #     preds = torch.argmax(outputs, dim=1).detach() # 获取每个样本预测的最大值对应的类别标签
             #     self.metrics.sample_add(targets, preds) # 更新混淆矩阵
-            #     # total_samples += targets.size(0)
             # self.scheduler.step()
-            # train_loss /= len(self.train_loader.dataset) # total_samples
+            # train_loss /= self.train_count # total_samples
             # self.train_loss_all.append(train_loss)
             # _, train_acc = self.metrics.acc()
             # self.train_acc_all.append(train_acc.cpu())
@@ -229,21 +218,19 @@ class BaseTrainer(nn.Module):
             # self.logger.info(f"Train Acc: {train_acc:.4f}")
 
             train_results = self.train_step()
-            self.logger.info(f"Train Loss: {train_results['loss']:.4f}")
-            self.logger.info(f"Train Acc: {train_results['acc']:.4f}")
 
-            # evaluate_results = self.evaluate()
             val_results = self.evaluate()
             self.logger.info(f"Validation Loss: {val_results['loss']:.4f}")
             self.logger.info(f"Validation Acc: {val_results['acc']:.4f}")
 
-            # # 定期测试
-            # if (epoch + 1) % 5 == 0:  # 每5个epoch进行一次测试
-            #     test_results = self.test()
-            #     self.logger.info(f"Test Loss: {test_results['loss']:.4f}")
-            #     self.logger.info(f"Test Acc: {test_results['acc']:.4f}")
+            # 定期测试
+            if (epoch + 1) % 10 == 0:
+                test_results = self.test()
+                self.logger.info(f"Test Loss: {test_results['loss']:.4f}")
+                self.logger.info(f"Test Acc: {test_results['acc']:.4f}")
 
             val_acc = val_results['acc']
+            miou = self.val_metrics_result['total_iou']
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 checkpoint = {
@@ -252,47 +239,47 @@ class BaseTrainer(nn.Module):
                     'model': self.model.state_dict(),
                     'optimizer': self.optimizer.state_dict(),
                     'lr_schedule': self.scheduler.state_dict()}
-                self.save_model(f"epoch_{epoch + 1}_valacc_{val_acc:.4f}.pth",
+                self.save_model(f"epoch_{epoch + 1}_acc_{val_acc:.4f}_miou_{miou:.4f}.pth",
                                 checkpoint=checkpoint)
 
-        test_results = self.test()
-        self.logger.info(f"Test Loss: {test_results['loss']:.4f}")
-        self.logger.info(f"Test Acc: {test_results['acc']:.4f}")
+        # test_results = self.test()
+        # self.logger.info(f"Test Loss: {test_results['loss']:.4f}")
+        # self.logger.info(f"Test Acc: {test_results['acc']:.4f}")
 
         self.plot_acc_loss(save_path=os.path.join(self.save_dir, 'acc_loss.png'))
-        # if self.cls:
-        #     self.plot_confusion_matrix(cm =self.cnf_matrix,
-        #                                classes= [i for i in range(self.num_classes)],)
+        if self.cls:
+            self.plot_confusion_matrix(cm =self.cnf_matrix,
+                                       classes= [i for i in range(self.num_classes)],)
 
     def train_step(self):
         total_loss = 0.0
-        self.model.train()
         self.metrics.update()
+        self.model.train()
         self.logger.info("start training ...")
         for batch in tqdm(self.train_loader, total=self.train_count, desc='Training'):
             inputs, targets = batch
-            inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
+            inputs = inputs.float().to(self.device)
+            targets = targets.long().to(self.device)
 
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            # print(outputs.dtype)
-            # print(targets.dtype)
             loss = self.criterion(outputs, targets)
             loss.backward()
             self.optimizer.step()
-
-            total_loss += loss.item() * targets.size(0)
+            total_loss += loss.item()# * targets.size(0)
+            
             preds = torch.argmax(outputs, dim=1).detach()
+            # _, preds = torch.max(outputs, dim=1)
             self.metrics.sample_add(targets, preds)
 
         self.scheduler.step()
-        avg_loss = total_loss / len(self.train_loader.dataset)
+        avg_loss = total_loss /self.train_count #len(self.train_loader.dataset)
         results = self.metrics.compute()
         train_acc = results['total_acc']
         self.train_loss_all.append(avg_loss)
         self.train_acc_all.append(train_acc)
-
+        self.logger.info(f"Train Loss: {avg_loss:.4f}")
+        self.logger.info(f"Train Acc: {train_acc:.4f}")
         return {'loss': avg_loss, 'acc': train_acc}
 
     def evaluate(self):
@@ -310,32 +297,34 @@ class BaseTrainer(nn.Module):
         """
         # 在验证过程中不执行 dropout 和 batch normalization 的更新
         total_loss = 0.0
-        self.model.eval()
         self.metrics.update()
+        self.model.eval()
         with torch.no_grad():
             self.logger.info("start evaluating ...")
             for batch in tqdm(self.val_loader, total=self.val_count, desc='Evaluating'):
                 inputs, targets = batch
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.float().to(self.device)
+                targets = targets.long().to(self.device)
 
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
-                total_loss += loss.item() * targets.size(0)
-
                 preds = torch.argmax(outputs, dim=1).detach() # 获取每个样本预测的最大值对应的类别标签
+                # _, preds = torch.max(outputs, dim=1)
                 self.metrics.sample_add(targets, preds) # 更新混淆矩阵
-
-        avg_loss = total_loss / len(self.train_loader.dataset) # total_samples
+                
+                total_loss += loss.item() # * targets.size(0)
+                
+        avg_loss = total_loss /self.val_count #len(self.train_loader.dataset)
         # 计算并记录指标
         results = self.metrics.compute()
+        self.val_metrics_result = results
         self.logger.info("Validation metrics:")
         for key, value in results.items():
             self.logger.info(f"{key}: {value}")
         val_acc = results['total_acc']
         self.val_acc_all.append(val_acc)
         self.val_loss_all.append(avg_loss)
-        return {'loss': avg_loss, 'acc': val_acc} # results
+        return {'loss': avg_loss, 'acc': val_acc}
 
     def test(self):
         total_loss = 0.0
@@ -345,37 +334,22 @@ class BaseTrainer(nn.Module):
         with torch.no_grad():
             for batch in tqdm(self.test_loader, total=self.test_count, desc='Testing'):
                 inputs, targets = batch
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
+                inputs = inputs.float().to(self.device)
+                targets = targets.long().to(self.device)    
 
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, targets)
-                total_loss += loss.item() * targets.size(0)
+                total_loss += loss.item()# * targets.size(0)
 
                 preds = torch.argmax(outputs, dim=1).detach()#.cpu().numpy()
-                # # 更新混淆矩阵数据
-                # if self.cls:  # 分类问题
-                #     for idx in range(len(targets)):
-                #         self.cnf_matrix[targets[idx]][outputs[idx]] += 1
-                # 更新混淆矩阵
+                # _, preds = torch.max(outputs, dim=1)
                 self.metrics.sample_add(targets, preds)
 
-        avg_loss = total_loss / len(self.test_loader.dataset) #total_samples
-        _, test_acc = self.metrics.acc()
-        # self.logger.info(f"Final Test Loss: {test_loss:.4f}")
-        # self.logger.info(f"Final Test Acc: {test_acc:.4f}")
-        # self.val_loss_all.append(test_loss)
-        # # val_acc = total_correct / total_samples
-
-        # self.val_acc_all.append(test_acc.cpu())
-        # self.logger.info(f"Test Loss: {test_loss:.4f}")
-        # self.logger.info(f"Test Acc: {test_acc:.4f}")
-        #
-        # # 计算并记录指标
-        # results = self.metrics.compute()
-        # self.logger.info("Test metrics:")
-        # for key, value in results.items():
-        #     self.logger.info(f"{key}: {value}")
+        avg_loss = total_loss / self.test_count # len(self.test_loader.dataset) #total_samples
+        # _, test_acc = self.metrics.acc()
+        # 计算并记录指标
+        results = self.metrics.compute()
+        test_acc = results['total_acc']
         return {'loss': avg_loss, 'acc': test_acc}
 
     @torch.no_grad()
@@ -391,7 +365,7 @@ class BaseTrainer(nn.Module):
         """
         if not isinstance(inputs, torch.Tensor):
             inputs = torch.tensor(inputs)
-        inputs = inputs.to(self.device)
+        inputs = inputs.float().to(self.device)
         self.model.eval()
         pred = self.model(inputs)
         pred = torch.argmax(pred, dim=1)
@@ -414,28 +388,53 @@ class BaseTrainer(nn.Module):
         self.model_name = filename
         self.logger.info(f"Model saved to {model_path}")
 
-    def load_model(self, checkpoint):
+    def load_model(self, checkpoint_fn):
         """
         目标: 从指定的检查点文件加载模型参数，用于恢复训练或进行推理。
         加载模型参数: 调用 torch.load(checkpoint) 从检查点文件中加载模型的状态字典，并将其加载到当前模型中。
         设置设备: 将加载后的模型移动到指定的设备上（如 GPU），以便进行后续的训练或验证。
         记录模型加载: 记录模型加载的路径，便于追踪和调试。
         """
-        if not os.path.exists(checkpoint):
-            self.logger.error(f"Loading model from {checkpoint}")
-            raise FileNotFoundError(f"Checkpoint file {checkpoint} not found.")
+        if not os.path.exists(checkpoint_fn):
+            self.logger.error(f"Loading model from {checkpoint_fn}")
+            raise FileNotFoundError(f"Checkpoint file {checkpoint_fn} not found.")
 
         try:
-            checkpoint = torch.load(checkpoint, weights_only=False)
-            # start_epoch = checkpoint['epoch']
+            checkpoint = torch.load(checkpoint_fn, weights_only=False)
+            start_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model'], strict=False)
-            self.model.to(self.device)
+            # self.model.load_state_dict(checkpoint, strict=False)
+            # self.model.to(self.device)
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.scheduler.load_state_dict(checkpoint['lr_schedule'])
         except Exception as e:
-            self.logger.error(f"Warning: Error loading model from {checkpoint}: {e}")
+            self.logger.error(f"Warning: Error loading model from {checkpoint_fn}: {e}")
             raise e
         # self.logger.info(f"Model loaded from {checkpoint}")
+
+    
+    def export_onnx(self):
+        self.model.eval()
+
+        # 创建一个示例输入张量
+        # 替换 (1, 3, 224, 224) 为你模型的实际输入尺寸
+        x, y = next(iter(self.train_loader))
+        input_shape = list(x[0,:].cpu().numpy().shape)
+        input_shape.insert(0, 1)
+        dummy_input = torch.randn(input_shape).to('cuda:0')
+
+        # 导出模型
+        torch.onnx.export(
+            self.model,                # 要转换的模型
+            dummy_input,               # 示例输入张量
+            'your_model.onnx',         # 输出的 ONNX 文件名
+            input_names=['input'],     # 输入节点名称（可选）
+            output_names=['output'],   # 输出节点名称（可选）
+            opset_version=11           # ONNX 操作集版本（通常使用最新支持的版本）
+        )
+
+        print("模型已成功导出为 ONNX 格式")
+
 
     def plot_acc_loss(self, save_path=None):
         # 检查数据有效性

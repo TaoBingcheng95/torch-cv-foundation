@@ -21,9 +21,9 @@ except ImportError:
 import segmentation_models_pytorch as smp
 import timm
 
-from models.components import FCN
-from models import utils
-from models.components import get_weight
+from components import FCN
+from models.utils import extract_backbone, load_state_dict, modify_resnet
+# from models.components import get_weight
 
 
 BACKBONE_LAT_DIM_MAP = {
@@ -131,9 +131,10 @@ def SemanticSegmentationModel(model: str ="unet",
             if isinstance(weights, WeightsEnum):
                 state_dict = weights.get_state_dict(progress=True)
             elif os.path.exists(weights):
-                _, state_dict = utils.extract_backbone(weights)
+                _, state_dict = extract_backbone(weights)
             else:
-                state_dict = get_weight(weights).get_state_dict(progress=True)
+                pass
+                # state_dict = get_weight(weights).get_state_dict(progress=True)
             seg_model.encoder.load_state_dict(state_dict)
 
     # Freeze backbone
@@ -147,6 +148,7 @@ def SemanticSegmentationModel(model: str ="unet",
             param.requires_grad = False
 
     return seg_model
+
 
 def ClassificationModel(model: str = 'resnet50',
                         weights: WeightsEnum | str | bool | None = None,
@@ -191,10 +193,11 @@ def ClassificationModel(model: str = 'resnet50',
         if isinstance(weights, WeightsEnum):
             state_dict = weights.get_state_dict(progress=True)
         elif os.path.exists(weights):
-            _, state_dict = utils.extract_backbone(weights)
+            _, state_dict = extract_backbone(weights)
         else:
-            state_dict = get_weight(weights).get_state_dict(progress=True)
-        utils.load_state_dict(cls_model, state_dict)
+            pass
+            # state_dict = get_weight(weights).get_state_dict(progress=True)
+        load_state_dict(cls_model, state_dict)
 
     # Freeze backbone and unfreeze classifier head
     if freeze_backbone:

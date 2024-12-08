@@ -95,7 +95,8 @@ def decode_seg_map_sequence(label_masks, dataset='pascal'):
 
 
 def decode_segmap(label_mask, dataset, plot=False):
-    """Decode segmentation class labels into a color image
+    """
+    Decode segmentation class labels into a color image
     Args:
         label_mask (np.ndarray): an (M,N) array of integer values denoting
           the class label at each spatial location.
@@ -113,9 +114,6 @@ def decode_segmap(label_mask, dataset, plot=False):
     else:
         raise NotImplementedError
 
-    # r = label_mask.copy()
-    # g = label_mask.copy()
-    # b = label_mask.copy()
     r = np.zeros_like(label_mask)
     g = np.zeros_like(label_mask)
     b = np.zeros_like(label_mask)
@@ -144,11 +142,11 @@ def encode_segmap(mask):
         (np.ndarray): class map with dimensions (M,N), where the value at
         a given location is the integer denoting the class index.
     """
-    mask = mask.astype(int)
-    label_mask = np.zeros((mask.shape[0], mask.shape[1]), dtype=np.int16)
+    mask = mask.astype(np.uint8)
+    label_mask = np.zeros((mask.shape[0], mask.shape[1]), dtype=np.uint8)
     for ii, label in enumerate(get_pascal_labels()):
         label_mask[np.where(np.all(mask == label, axis=-1))[:2]] = ii
-    label_mask = label_mask.astype(int)
+    label_mask = label_mask.astype(np.uint8)
     return label_mask
 
 

@@ -22,3 +22,4 @@ if __name__ == '__main__':
     print('cudnn version : ', torch.backends.cudnn.version())
 
     check_cuda_availability()
+    print(torch.__config__.show())

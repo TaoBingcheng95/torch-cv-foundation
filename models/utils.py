@@ -5,12 +5,15 @@
 
 import warnings
 from collections import OrderedDict
-from typing import cast
+from collections.abc import Callable
+from typing import cast, Any
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.modules import Conv2d, Module
+from torchvision.models._api import WeightsEnum
+
 
 
 def extract_backbone(path: str) -> tuple[str, 'OrderedDict[str, Tensor]']:
@@ -182,3 +185,17 @@ def reinit_initial_conv_layer(
             cast(Tensor, new_layer.bias).data = b_old
 
     return new_layer
+
+
+def modify_resnet(model,in_channels=3):
+    # import torchvision.models as models
+    # backbone = model.resnet18()
+    backbone = model.resnet18()
+    original_conv1 = backbone.conv1
+    backbone.conv1 = nn.Conv2d(in_channels, original_conv1.out_channels, 
+                                kernel_size=original_conv1.kernel_size,
+                                stride=original_conv1.stride, 
+                                padding=original_conv1.padding, 
+                                bias=original_conv1.bias is not None)
+    # model.resnet18() = backbone
+    return backbone

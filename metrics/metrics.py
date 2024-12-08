@@ -7,8 +7,8 @@ class Metrics:
         self.device = device
         self.cfm = self.cfm_init(self.class_num)
 
-    def cfm_init(self, class_num):
-        return torch.zeros(size=(class_num, class_num), dtype=torch.int).to(self.device)
+    def cfm_init(self, class_num, dtype=torch.int64):
+        return torch.zeros(size=(class_num, class_num), dtype=dtype).to(self.device)
 
     def update(self):
         # self.cfm = self.cfm_init(self.class_num)
