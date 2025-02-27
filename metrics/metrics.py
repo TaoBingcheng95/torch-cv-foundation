@@ -1,4 +1,6 @@
-import os
+# https://mp.weixin.qq.com/s/tiqqFdjTip8IaPx6AMXVpQ
+# import os
+import numpy as np
 import torch
 
 class Metrics:
@@ -87,6 +89,66 @@ class Metrics:
         return results
 
 
+class SegmentationMetric(object):
+    def __init__(self, numClass, imgPredict, imgLabel):
+        self.numClass = numClass
+        self.confusionMatrix = np.zeros((self.numClass,) * 2)
+        assert imgPredict.shape == imgLabel.shape
+        self.confusionMatrix += self.genConfusionMatrix(imgPredict, imgLabel)
+
+    def pixelAccuracy(self):
+        # return all class overall pixel accuracy
+        #  PA = acc = (TP + TN) / (TP + TN + FP + TN)
+        acc = np.diag(self.confusionMatrix).sum() / self.confusionMatrix.sum()
+        return acc
+
+    def classPixelAccuracy(self):
+        # return each category pixel accuracy(A more accurate way to call it precision)
+        # acc = (TP) / TP + FP
+        classAcc = np.diag(self.confusionMatrix) / self.confusionMatrix.sum(axis=1)
+        return classAcc  # 返回的是一个列表值，如：[0.90, 0.80, 0.96]，表示类别1 2 3各类别的预测准确率
+
+    def meanPixelAccuracy(self):
+        classAcc = self.classPixelAccuracy()
+        meanAcc = np.nanmean(classAcc)  # np.nanmean 求平均值，nan表示遇到Nan类型，其值取为0
+        return meanAcc  # 返回单个值，如：np.nanmean([0.90, 0.80, 0.96, nan, nan]) = (0.90 + 0.80 + 0.96） / 3 =  0.89
+
+    def meanIntersectionOverUnion(self):
+        # Intersection = TP Union = TP + FP + FN
+        # IoU = TP / (TP + FP + FN)
+        intersection = np.diag(self.confusionMatrix)  # 取对角元素的值，返回列表
+        # union = np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) - np.diag(
+        #     self.confusionMatrix)  # axis = 1表示混淆矩阵行的值，返回列表； axis = 0表示取混淆矩阵列的值，返回列表
+        # axis = 1表示混淆矩阵行的值，返回列表； axis = 0表示取混淆矩阵列的值，返回列表
+        union = np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) - intersection
+        IoU = intersection / union  # 返回列表，其值为各个类别的IoU
+        mIoU = np.nanmean(IoU)  # 求各类别IoU的平均
+        return mIoU
+
+    def genConfusionMatrix(self, imgPredict, imgLabel):  # 同FCN中score.py的fast_hist()函数
+        # remove classes from unlabeled pixels in gt image and predict
+        mask = (imgLabel >= 0) & (imgLabel < self.numClass)
+        label = self.numClass * imgLabel[mask] + imgPredict[mask]
+        # print(mask.shape)
+        # print(label.shape)
+        count = np.bincount(label, minlength=self.numClass ** 2)
+        confusionMatrix = count.reshape(self.numClass, self.numClass)
+        return confusionMatrix
+
+    def Frequency_Weighted_Intersection_over_Union(self):
+        # FWIOU =     [(TP+FN)/(TP+FP+TN+FN)] *[TP / (TP + FP + FN)]
+        freq = np.sum(self.confusionMatrix, axis=1) / np.sum(self.confusionMatrix)
+        iu = np.diag(self.confusionMatrix) / (
+                np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) -
+                np.diag(self.confusionMatrix))
+        FWIoU = (freq[freq > 0] * iu[freq > 0]).sum()
+        return FWIoU
+
+    def reset(self):
+        self.confusionMatrix = np.zeros((self.numClass, self.numClass))
+
+
+
 if __name__ == '__main__':
 
     # 假设我们有一个3类的语义分割任务
@@ -107,3 +169,12 @@ if __name__ == '__main__':
     print("评估指标:")
     for key, value in results.items():
         print(f"{key}: {value}")
+
+    """
+    img1 = torch.Tensor([[0, 1, 2], [0, 1, 0]])
+    img2 = torch.Tensor([[0, 1, 2], [2, 1, 1]])
+    e = SegmentationMetric(3, img1, img2)
+    print(e.Frequency_Weighted_Intersection_over_Union())
+    print(e.pixelAccuracy())
+    print(e.confusionMatrix)
+    """

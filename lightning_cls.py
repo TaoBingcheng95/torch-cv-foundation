@@ -106,6 +106,7 @@ if __name__ == "__main__":
     trainer = pl.Trainer(max_epochs=5,
                          devices=1,
                          accelerator="gpu",
+                         profile=True, # AdvancedProfiler()
                          callbacks = [model_checkpoint,
                                       early_stopping,
                                       # model_summary,

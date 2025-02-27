@@ -2,7 +2,7 @@
 """
 PyTorch reference: https://pytorch.org/tutorials/beginner/blitz/neural_networks_tutorial.html
 """
-from __future__ import annotations
+# from __future__ import annotations
 
 import lightning.pytorch as pl
 import torch

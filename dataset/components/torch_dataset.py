@@ -1,12 +1,17 @@
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
-from torchvision.datasets import CIFAR10, FashionMNIST, Cityscapes, MNIST
-from torchvision import datasets
+from torchvision.datasets import CIFAR10, FashionMNIST, MNIST
+# from torchvision import datasets
 from torch.utils.data import Dataset, DataLoader, random_split
 
 
 class MNISTLoader:
-    def __init__(self, root='./data', train=True, transform=None, target_transform=None, download=False, val_split = 0.4):
+    def __init__(self, root='./data',
+                 train=True,
+                 transform=None,
+                 target_transform=None,
+                 download=False,
+                 val_split = 0.4):
         super(MNISTLoader, self).__init__()
 
         # 定义数据的预处理变换(归一化)
@@ -34,8 +39,9 @@ class MNISTLoader:
         self.idx_to_class = {value: key for key, value in self.class_to_idx.items()}
         if val_split:
             train_count = len(self.train_ds)
+            lengths = [train_count - int(train_count * val_split), int(train_count * val_split)]
             self.train_ds, self.val_ds = random_split(self.train_ds,
-                                                      [train_count - int(train_count * val_split), int(train_count * val_split)])
+                                                      lengths=lengths)
         else:
             self.val_ds = self.test_ds
 
@@ -69,10 +75,16 @@ class MNISTLoader:
         axis.imshow(x.permute(1, 2, 0), cmap='viridis')
         axis.set_title(self.idx_to_class[y])
         plt.show()
+        plt.close()
 
 
 class FashionMNISTLoader:
-    def __init__(self, root='./data', train=True, transform=None, target_transform=None, download=False, val_split = 0.4):
+    def __init__(self, root='./data',
+                 train=True,
+                 transform=None,
+                 target_transform=None,
+                 download=False,
+                 val_split = 0.4):
         super(FashionMNISTLoader, self).__init__()
 
         # 定义数据的预处理变换(归一化)
@@ -138,7 +150,12 @@ class FashionMNISTLoader:
 
 
 class CIFAR10Loader:
-    def __init__(self, root, train=True, transform=None, target_transform=None, download=False, val_split = 0.4):
+    def __init__(self, root,
+                 train=True,
+                 transform=None,
+                 target_transform=None,
+                 download=False,
+                 val_split = 0.4):
         super(CIFAR10Loader, self).__init__()
 
         self.root = root

@@ -9,7 +9,7 @@ class FlowerDataModule(LightningDataModule):
     def __init__(self, data_dir: str,
                  batch_size: int = 32,
                  image_size: int = 224,
-                 num_work: int = 1):
+                 num_work: int = 0):
         super().__init__()
         self.test_dataset = None
         self.val_dataset = None

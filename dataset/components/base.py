@@ -10,7 +10,7 @@ from torchvision.datasets import ImageFolder
 
 
 class BaseSegmentationDataset(Dataset, ABC):
-    def __init__(self, root=None, img_folder='image',  label_folder='label',
+    def __init__(self, root=None, img_folder='image', label_folder='label',
                  transform=None,
                  suffix='.jpg',
                  band_reversal=False, 
@@ -98,7 +98,7 @@ class BaseClassificationDataset:
 
     def get_dataloader(self):
         dataset = ImageFolder(root=self.data_dir,
-                                       transform=self.transform, )
+                              transform=self.transform)
         # dataloader = DataLoader(dataset,
         #                           batch_size=self.batch_size,
         #                           shuffle=True)

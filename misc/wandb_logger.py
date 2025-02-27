@@ -5,7 +5,6 @@ class WandbLogger:
     """
     Log using `Weights and Biases`.
     """
-
     def __init__(self, opt):
         try:
             import wandb
@@ -14,9 +13,7 @@ class WandbLogger:
                 "To use the Weights and Biases Logger please install wandb."
                 "Run `pip install wandb` to install it."
             )
-
         self._wandb = wandb
-
         # Initialize a W&B run
         if self._wandb.run is None:
             self._wandb.init(
@@ -24,22 +21,15 @@ class WandbLogger:
                 config=opt,
                 dir='./experiments'
             )
-
         self.config = self._wandb.config
-
         if self.config.get('log_eval', None):
-            self.eval_table = self._wandb.Table(columns=['fake_image',
-                                                         'sr_image',
-                                                         'hr_image',
-                                                         'psnr',
-                                                         'ssim'])
+            self.eval_table = self._wandb.Table(columns=['fake_image', 'sr_image',
+                                                         'hr_image', 'psnr', 'ssim'])
         else:
             self.eval_table = None
 
         if self.config.get('log_infer', None):
-            self.infer_table = self._wandb.Table(columns=['fake_image',
-                                                          'sr_image',
-                                                          'hr_image'])
+            self.infer_table = self._wandb.Table(columns=['fake_image', 'sr_image', 'hr_image'])
         else:
             self.infer_table = None
 

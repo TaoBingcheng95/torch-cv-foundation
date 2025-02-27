@@ -6,13 +6,17 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from torch.utils.data import Dataset
+from torchvision.transforms import transforms
 
 # from .base import BaseSegmentationDataset
 from . import BaseSegmentationDataset
 
 
 class NAIPDataset(BaseSegmentationDataset):
-    def __init__(self, root, img_folder='imgs', label_folder='labels', transform=None, **kwargs):
+    def __init__(self, root, img_folder='imgs',
+                 label_folder='labels',
+                 transform=None,
+                 **kwargs):
         super().__init__(root, **kwargs)
         self.root = root
         self.transform = transform
@@ -26,22 +30,20 @@ class NAIPDataset(BaseSegmentationDataset):
     def num_classes(self) -> int:
         """
         Get the number of classes.
-        calss is is 1-6 in original NAIP mask
+        class is is 1-6 in original NAIP mask
 
-        :return: The number of WHDLD classes (6).
+        :return: The number of NAIP classes (6).
         """
         return 6
 
     @property
-    def dict_classes(self) -> int:
+    def dict_classes(self) -> list[str]:
         """
         Get the text for classes id.
 
         :return: The list of WHDLD classes (6).
         """
         return ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
-
-
 
     # def __getitem__(self, idx):
     #     image_path = self.images[idx]
@@ -82,15 +84,16 @@ class NAIPDataset(BaseSegmentationDataset):
     #     plt.close()
 
 
-########################################
-
-
 class WHDLDDataset(Dataset):
     """
     https://sites.google.com/view/zhouwx/dataset#h.p_hQS2jYeaFpV0
     """
-    def __init__(self, root, img_folder='Images', label_folder='ImagesPNG', transform=None, **kwargs):
+    def __init__(self, root,
+                 img_folder='Images',
+                 label_folder='ImagesPNG',
+                 transform=None, **kwargs):
         super().__init__()
+        self._num_classes = None
         self.root = root
         self.dataset_name = 'WHDLD'
         self.transform = transform
@@ -99,7 +102,7 @@ class WHDLDDataset(Dataset):
         self.images.sort()
         self.masks.sort()
         self.classes = ['building', 'road', 'pavement', 'vegetation', 'bare soil', 'water']
-        self.num_classes = len(self.classes) # 1-6 in original data 
+        # self.num_classes = len(self.classes) # 1-6 in original data
 
     def __len__(self):
         return len(self.masks)
@@ -108,7 +111,7 @@ class WHDLDDataset(Dataset):
     def num_classes(self) -> int:
         """
         Get the number of classes.
-        calss is is 1-6 in original WHDLD mask
+        class is 1-6 in original WHDLD mask
 
         :return: The number of WHDLD classes (6).
         """
@@ -129,7 +132,6 @@ class WHDLDDataset(Dataset):
         image_arr = np.array(Image.open(self.images[idx])).transpose((2,0,1))
         # mask_arr = mask_arr.astype(np.int64)
         return image_arr, mask_arr
-
 
     def plot(self, idx=None, save=False, cmap='gray'): # viridis
         # assert 0<=idx < len(self), "Index out of range"
@@ -161,6 +163,10 @@ class WHDLDDataset(Dataset):
         finally:
             plt.close()
 
+    @num_classes.setter
+    def num_classes(self, value):
+        self._num_classes = value
+
 
 class JiageDataset(Dataset):
     def __init__(self, root, transform=None, **kwargs):
@@ -173,10 +179,8 @@ class JiageDataset(Dataset):
         # self.images = glob(os.path.join(self.root, 'image','*.tif'))
         self.images = [i.replace('mask', 'image') for i in self.masks]
 
-    
     def __len__(self):
         return len(self.masks)
-
 
     @property
     def num_classes(self) -> int:
@@ -188,7 +192,7 @@ class JiageDataset(Dataset):
         return 2
 
     @property
-    def dict_classes(self) -> int:
+    def dict_classes(self) -> list[str]:
         """
         Get the text for classes id.
 
@@ -245,7 +249,6 @@ class TianchiDataset(Dataset):
         # self.classes = ['background', 'building']
         # self.num_classes = 2
 
-
     @property
     def num_classes(self) -> int:
         """
@@ -256,7 +259,7 @@ class TianchiDataset(Dataset):
         return 2
 
     @property
-    def dict_classes(self) -> int:
+    def dict_classes(self) -> list[str]:
         """
         Get the text for classes id.
 
@@ -300,6 +303,39 @@ class TianchiDataset(Dataset):
         finally:
             plt.close()
 
+
+class UTKFace(Dataset):
+    def __init__(self, data_dir):
+        self.transform = transforms.Compose([transforms.Resize((32, 32)),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize([0.485, 0.456, 0.406],
+                                                                  [0.229, 0.224, 0.225])])
+        self.image_paths = glob(os.path.join(data_dir, '*.jpg'))
+        self.images = []
+        self.ages = []
+        self.genders = []
+        self.races = []
+        for fn_path in self.image_paths:
+            basename = os.path.basename(fn_path)
+            filename = basename.split("_")
+            if len(filename)==4:
+                self.images.append(fn_path)
+                self.ages.append(int(filename[0]))
+                self.genders.append(int(filename[1]))
+                self.races.append(int(filename[2]))
+    def __len__(self):
+        return len(self.images)
+    def __getitem__(self, index)->dict[str, Any]:
+        img = Image.open(self.images[index]).convert('RGB')
+        img = self.transform(img)
+        age = self.ages[index]
+        gender = self.genders[index]
+        eth = self.races[index]
+        sample = {'image':img,
+                  'age': age,
+                  'gender': gender,
+                  'ethnicity':eth}
+        return sample
 
 
 if __name__ == '__main__':

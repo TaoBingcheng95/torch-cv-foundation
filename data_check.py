@@ -4,7 +4,7 @@ import torch
 
 from dataset.components import NAIPDataset
 from dataset import TianchiDataModule
-from transforms import transforms as T
+# from transforms import transforms as T
 from transforms.transforms_albu import train_transform
 
 

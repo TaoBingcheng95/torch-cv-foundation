@@ -1,3 +1,4 @@
+# https://mp.weixin.qq.com/s/ZsKwD-Cb1ynqvCdBIWlZgw
 import os
 from dataset.mnist_datamodule import MNISTDataModule
 from models.components import SimpleDenseNet
@@ -9,6 +10,7 @@ if __name__ == '__main__':
 
     dm = MNISTDataModule(data_dir='./data',
                          batch_size=8,
+                         # num_worker=4 * num_GPU,
                          pin_memory=True)
     dm.prepare_data()
     dm.setup()

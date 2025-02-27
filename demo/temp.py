@@ -1,6 +1,6 @@
 import time
 import numpy as np
-
+import torch
 import torch.backends.cudnn as cudnn
 cudnn.benchmark = True
 
