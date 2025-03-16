@@ -2,14 +2,12 @@
 """
 PyTorch reference: https://pytorch.org/tutorials/beginner/blitz/neural_networks_tutorial.html
 """
-# from __future__ import annotations
 
 import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchmetrics
-from torchinfo import summary
 
 
 class LeNetLitModule(pl.LightningModule):
@@ -21,7 +19,7 @@ class LeNetLitModule(pl.LightningModule):
         """
         super().__init__()
         # Debugging tool to display intermediate input/output size of all your layer (called before fit)
-        self.example_input_array = torch.Tensor(16, in_channels, 32, 32)
+        # self.example_input_array = torch.Tensor(16, in_channels, 32, 32)
         self.learning_rate = lr
 
         self.train_accuracy = torchmetrics.Accuracy(task="multiclass", num_classes=out_channels)
@@ -36,7 +34,7 @@ class LeNetLitModule(pl.LightningModule):
                 out_channels=6,
                 kernel_size=5,
                 stride=1,
-                # Either resize (28x28) MNIST images to (32x32) or pad the imput to be 32x32
+                # Either resize (28x28) MNIST images to (32x32) or pad the input to be 32x32
                 # padding=2,
             ),
             nn.MaxPool2d(kernel_size=2),
@@ -46,8 +44,9 @@ class LeNetLitModule(pl.LightningModule):
             nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5, stride=1, padding=0),
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
-        # The activation size (number of values after passing through one layer) is getting gradually smaller and smaller.
-        # The output is flatten and then used as a long input into the next dense layers.
+        # The activation size (number of values after passing through one layer) is getting gradually smaller
+        # and smaller.
+        # The output is flattened and then used as a long input into the next dense layers.
         self.fc1 = nn.Linear(in_features=16 * 5 * 5, out_features=120)  # 5 from the image dimension
         self.fc2 = nn.Linear(in_features=120, out_features=84)
         # "Softmax" layer = Linear + Softmax.
@@ -132,6 +131,8 @@ class LeNetLitModule(pl.LightningModule):
 
 
 if __name__ == "__main__":
+    from torchinfo import summary
+
     inputs_size = (1, 1, 32, 32)
     model = LeNetLitModule(in_channels=1, out_channels=10)
     summary(model, inputs_size)

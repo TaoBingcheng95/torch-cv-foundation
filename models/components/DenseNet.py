@@ -5,12 +5,20 @@ from collections import OrderedDict
 from typing import List, Tuple
 
 import torch
+from torch import jit
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
 from torch import Tensor
 
 from torchinfo import summary
+
+
+def any_requires_grad(inputs: List[Tensor]) -> bool:
+    for tensor in inputs:
+        if tensor.requires_grad:
+            return True
+    return False
 
 
 class DenseLayer(nn.Module):
@@ -35,37 +43,31 @@ class DenseLayer(nn.Module):
         return bottleneck_output
 
     # todo: rewrite when torchscript supports any
-    def any_requires_grad(self, input: List[Tensor]) -> bool:
-        for tensor in input:
-            if tensor.requires_grad:
-                return True
-        return False
-
-    @torch.jit.unused  # noqa: T484
-    def call_checkpoint_bottleneck(self, input: List[Tensor]) -> Tensor:
+    @jit.unused  # noqa: T484
+    def call_checkpoint_bottleneck(self, inputs: List[Tensor]) -> Tensor:
         def closure(*inputs):
             return self.bn_function(inputs)
 
-        return cp.checkpoint(closure, *input, use_reentrant=False)
+        return cp.checkpoint(closure, *inputs, use_reentrant=False)
 
-    @torch.jit._overload_method  # noqa: F811
-    def forward(self, input: List[Tensor]) -> Tensor:  # noqa: F811
+    @jit._overload_method  # noqa: F811
+    def forward(self, inputs: List[Tensor]) -> Tensor:  # noqa: F811
         pass
 
-    @torch.jit._overload_method  # noqa: F811
-    def forward(self, input: Tensor) -> Tensor:  # noqa: F811
+    @jit._overload_method  # noqa: F811
+    def forward(self, inputs: Tensor) -> Tensor:  # noqa: F811
         pass
 
     # torchscript does not yet support *args, so we overload method
     # allowing it to take either a List[Tensor] or single Tensor
-    def forward(self, input: Tensor) -> Tensor:  # noqa: F811
-        if isinstance(input, Tensor):
-            prev_features = [input]
+    def forward(self, inputs: Tensor) -> Tensor:  # noqa: F811
+        if isinstance(inputs, Tensor):
+            prev_features = [inputs]
         else:
-            prev_features = input
+            prev_features = inputs
 
-        if self.memory_efficient and self.any_requires_grad(prev_features):
-            if torch.jit.is_scripting():
+        if self.memory_efficient and any_requires_grad(prev_features):
+            if jit.is_scripting():
                 raise Exception("Memory Efficient not supported in JIT")
 
             bottleneck_output = self.call_checkpoint_bottleneck(prev_features)
@@ -202,6 +204,150 @@ class DenseNet(nn.Module):
         out = torch.flatten(out, 1)
         out = self.classifier(out)
         return out
+
+
+#######################################
+
+class Encoder(nn.Module):
+    def __init__(self, input_size: int = 784, hidden_size: int = 256):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
+            nn.ReLU()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class Decoder(nn.Module):
+    def __init__(self, hidden_size: int = 256, output_size: int = 256):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(hidden_size, output_size),
+            nn.BatchNorm1d(output_size),
+            nn.ReLU()
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+
+class ClassificationHead(nn.Module):
+    def __init__(self, hidden_size: int = 256, output_size: int = 10):
+        super().__init__()
+        self.layer = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layer(x)
+
+
+class SegmentationHead(nn.Module):
+    def __init__(self, hidden_size: int = 256, output_size: int = 784):
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.Linear(hidden_size, output_size),
+            nn.Sigmoid()  # Assuming binary segmentation
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layer(x)
+
+
+class ModernDenseNet(nn.Module):
+    def __init__(
+            self,
+            input_size: int = 784,
+            hidden_size: int = 256,
+            output_size: int = 10,
+            segmentation_output_size: int = 784
+    ) -> None:
+        super().__init__()
+
+        self.encoder = Encoder(input_size, hidden_size)
+        self.decoder = Decoder(hidden_size, hidden_size)
+        self.classification_head = ClassificationHead(hidden_size, output_size)
+        self.segmentation_head = SegmentationHead(hidden_size, segmentation_output_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, channels, width, height = x.size()
+        x = x.view(batch_size, -1)
+
+        x = self.encoder(x)
+        x = self.decoder(x)
+
+        # Determine the task based on the shape of the input
+        if x.size(1) == 784:  # Assume 784 indicates a segmentation task
+            return self.segmentation_head(x)
+        else:
+            return self.classification_head(x)
+
+
+class SimpleDenseNet(nn.Module):
+    """A simple fully-connected neural net for computing predictions."""
+
+    def __init__(
+            self,
+            input_size: int = 784,
+            lin1_size: int = 256,
+            lin2_size: int = 256,
+            lin3_size: int = 256,
+            output_size: int = 10,
+    ) -> None:
+        """
+        Initialize a `SimpleDenseNet` modules.
+
+        :param input_size: The number of input features.
+        :param lin1_size: The number of output features of the first linear layer.
+        :param lin2_size: The number of output features of the second linear layer.
+        :param lin3_size: The number of output features of the third linear layer.
+        :param output_size: The number of output features of the final linear layer.
+        """
+        super().__init__()
+
+        self.model = nn.Sequential(
+
+            nn.Linear(input_size, lin1_size),
+            nn.BatchNorm1d(lin1_size),
+            nn.ReLU(),
+
+            nn.Linear(lin1_size, lin2_size),
+            nn.BatchNorm1d(lin2_size),
+            nn.ReLU(),
+            nn.Linear(lin2_size, lin3_size),
+            nn.BatchNorm1d(lin3_size),
+
+            nn.ReLU(),
+            nn.Linear(lin3_size, output_size),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Perform a single forward pass through the network.
+
+        :param x: The input tensor.
+        :return: A tensor of predictions.
+        """
+        batch_size, channels, width, height = x.size()
+        # (batch, 1, width, height) -> (batch, 1*width*height)
+        x = x.view(batch_size, -1)
+        return self.model(x)
+
+
+def densenet_demo():
+    input_size = (1, 1, 28, 28)
+    model = ModernDenseNet()
+    model.eval()
+    # input_data = torch.randn(input_size)
+    # output = model(input_data)
+    # print(output.shape)
+    summary(model,
+            input_size=input_size,
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'],
+            row_settings=['var_names'],
+            verbose=True
+            )
 
 
 if __name__ == '__main__':

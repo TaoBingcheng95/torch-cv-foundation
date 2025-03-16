@@ -77,9 +77,7 @@ def _get_input_layer_name_and_module(model: Module) -> tuple[str, Module]:
     return key, module
 
 
-def load_state_dict(
-        model: Module, state_dict: 'OrderedDict[str, Tensor]'
-) -> tuple[list[str], list[str]]:
+def load_state_dict(model: Module, state_dict: 'OrderedDict[str, Tensor]') -> tuple[list[str], list[str]]:
     """
     Load pretrained resnet weights to a model.
 
@@ -138,7 +136,7 @@ def reinit_initial_conv_layer(
         new_padding: str | int | tuple[int, int] | None = None,
 ) -> Conv2d:
     """
-    Clones a Conv2d layer while optionally retaining some of the original weights.
+    Clones a Conv-2d layer while optionally retaining some of the original weights.
 
     When replacing the first convolutional layer in a model with one that operates over
     different number of input channels, we sometimes want to keep a subset of the kernel
@@ -146,14 +144,14 @@ def reinit_initial_conv_layer(
     convenience function that performs that function.
 
     Args:
-        layer: the Conv2d layer to initialize
+        layer: the Conv-2d layer to initialize
         new_in_channels: the new number of input channels
         keep_rgb_weights: flag indicating whether to re-initialize the first 3 channels
         new_stride: optionally, overwrites the ``layer``'s stride with this value
         new_padding: optionally, overwrites the ``layers``'s padding with this value
 
     Returns:
-        a Conv2d layer with new kernel weights
+        a Conv-2d layer with new kernel weights
     """
     use_bias = layer.bias is not None
     w_old = None

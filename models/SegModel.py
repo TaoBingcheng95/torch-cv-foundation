@@ -7,7 +7,7 @@ import lightning.pytorch as pl
 from argparse import ArgumentParser
 import torch
 from torch.utils.data import DataLoader
-from loss.loss_func import DiceLoss, CE_DiceLoss
+from loss.loss import DiceLoss, CE_DiceLoss
 from metrics import SegmentationMetric
 # from . import losses, metrics
 # from . import config

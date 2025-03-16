@@ -1,15 +1,19 @@
 
-from .LeNet import LeNet5
+from .LeNet import LeNet5, Net
 from .AlexNet import AlexNet
 from .vit import ViT
 from .AttUNet import UNet
-from .resnet import Resnet18
+from models.components.depredate.resnet import Resnet18
 from .BiSeNet import BiSeNetV1
-from .SimpleNet import SimpleDenseNet, SimpleUNet
-from .SimpleFCN import FCN
+# from .densenet_1 import SimpleDenseNet, SimpleUNet
+from .unet import SimpleUNet
+from .DenseNet import SimpleDenseNet
+# from .SimpleFCN import FCN
+from .fcn import FCN
 from .DenseNet import DenseNet
 
 __all__ = ['LeNet5',
+           'Net',
            'AlexNet',
            'UNet',
            'SimpleDenseNet',

@@ -56,18 +56,20 @@ class AlexNet(nn.Module):
 if __name__ == '__main__':
     try:
         from torchinfo import summary
-        model = AlexNet(in_channels=1, num_classes=10)
-        input_size=(1, 1, 32, 32)
-        input_data = torch.randn(input_size)
-        output = model(input_data)
-        # print(output.shape)
-
-        summary(model, 
-                input_size=input_size,
-                col_width=20,
-                col_names=['input_size', 'output_size', 'num_params', 'trainable'], 
-                row_settings=['var_names'], 
-                verbose=True
-                )
     except ImportError as e:
         print(e)
+        exit()
+
+    model = AlexNet(in_channels=1, num_classes=10)
+    input_size=(1, 1, 32, 32)
+    # input_data = torch.randn(input_size)
+    # output = model(input_data)
+    # print(output.shape)
+
+    summary(model,
+            input_size=input_size,
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'],
+            row_settings=['var_names'],
+            verbose=True
+            )

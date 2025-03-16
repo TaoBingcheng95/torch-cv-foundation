@@ -63,7 +63,7 @@ if __name__ == '__main__':
 
     print(os.environ['PROJECT_ROOT'])
 
-    config_path = "./configs"
+    config_path = "../configs"
     config_name = "train.yaml"
     # cfg = load_yaml(os.path.join(config_path, configs_fn))
 

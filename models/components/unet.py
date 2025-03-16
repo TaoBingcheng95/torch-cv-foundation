@@ -1,7 +1,9 @@
-# from torchvision.models import resnet50
+# https://github.com/fengdu78/machine_learning_beginner/tree/master/PyTorch_beginner
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torchinfo import summary
+
 
 
 class OriginUnet(nn.Module):
@@ -17,10 +19,9 @@ class OriginUnet(nn.Module):
         self.upconv2 = self.expand_block(64 * 2, 32, 3, 1)
         self.upconv1 = self.expand_block(32 * 2, out_channels, 3, 1)
 
-
     def forward(self, x):
         try:
-            # downsampling part
+            # down-sampling part
             conv1 = self.conv1(x)
             conv2 = self.conv2(conv1)
             conv3 = self.conv3(conv2)
@@ -33,7 +34,6 @@ class OriginUnet(nn.Module):
         except Exception as e:
             print(f"Error in forward pass: {e}")
             raise
-
 
     def contract_block(self, in_channels, out_channels, kernel_size, padding):
         contract = nn.Sequential(
@@ -137,18 +137,18 @@ class UNetDecoder(nn.Module):
         return dec4
 
 
-class UNetTaskHead(nn.Module):
+class UNetSegmentationTaskHead(nn.Module):
     def __init__(self, in_channels, out_channels):
-        super(UNetTaskHead, self).__init__()
+        super(UNetSegmentationTaskHead, self).__init__()
         self.final_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
         return self.final_conv(x)
 
 
-class UNetClassificationHead(nn.Module):
+class UNetClassificationTaskHead(nn.Module):
     def __init__(self, in_channels, num_classes):
-        super(UNetClassificationHead, self).__init__()
+        super(UNetClassificationTaskHead, self).__init__()
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Linear(in_channels, num_classes)
 
@@ -159,31 +159,38 @@ class UNetClassificationHead(nn.Module):
         return x
 
 
-class UNet(nn.Module):
-    def __init__(self, in_channels, out_channels, num_classes):
-        super(UNet, self).__init__()
+class SimpleUNet(nn.Module):
+    def __init__(self, in_channels=3, num_classes=10):
+        super(SimpleUNet, self).__init__()
         self.encoder = UNetEncoder(in_channels)
         self.decoder = UNetDecoder()
-        self.task_head = UNetTaskHead(128, out_channels)
-        self.classification_head = UNetClassificationHead(1024, num_classes)  # 分类头输入通道数为1024
+        self.task_head = UNetSegmentationTaskHead(128, num_classes)
+        self.classification_head = UNetClassificationTaskHead(1024, num_classes)  # 分类头输入通道数为1024
 
     def forward(self, x):
         enc1, enc2, enc3, enc4, bottleneck = self.encoder(x)
         dec4 = self.decoder(enc1, enc2, enc3, enc4, bottleneck)
         segmentation_output = self.task_head(dec4)
         # classification_output = self.classification_head(bottleneck)
-        return segmentation_output # segmentation_output, classification_output
+        return segmentation_output  # classification_output
 
 
-
-if __name__ == '__main__':
+def unet_demo():
     input_size = (1, 3, 512, 512)
-    model = UNet(3, 1, num_classes=2) # 3个输入通道（RGB图像），1个输出通道（二分类）
+    model = SimpleUNet(in_channels=3, num_classes=5)
+    # input_data = torch.randn(input_size)
+    # output = model(input_data)
+    # print(output.shape)
+    summary(model,
+            input_size=input_size,
+            col_width=20,
+            col_names=['input_size', 'output_size', 'num_params', 'trainable'],
+            row_settings=['var_names'],
+            verbose=True
+            )
 
-    summary(model, input_size=input_size)
 
-    # inputs = torch.randn(input_size)
-    # output = model(inputs)
-    # print(inputs.shape, ' -> ', output.shape)
 
+if __name__ == "__main__":
+    unet_demo()
 

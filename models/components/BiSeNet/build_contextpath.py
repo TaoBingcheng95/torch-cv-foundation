@@ -1,6 +1,6 @@
 import torch
 from torchvision import models
-from torchvision.models._api import Weights, WeightsEnum
+# from torchvision.models._api import Weights, WeightsEnum
 
 
 class resnet18(torch.nn.Module):

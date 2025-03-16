@@ -9,8 +9,8 @@ https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
 import torch
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
-import torch.utils.model_zoo as modelzoo
-from torch.nn import BatchNorm2d
+# import torch.utils.model_zoo as modelzoo
+# from torch.nn import BatchNorm2d
 
 
 model_urls = {
@@ -267,11 +267,3 @@ class resnet101(nn.Module):
         self.backbone = nn.Sequential(*list(backbone.children())[:-2])
     def forward(self,x):
         return self.backbone(x)
-
-
-
-
-
-
-
-

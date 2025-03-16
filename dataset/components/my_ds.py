@@ -30,7 +30,7 @@ class NAIPDataset(BaseSegmentationDataset):
     def num_classes(self) -> int:
         """
         Get the number of classes.
-        class is is 1-6 in original NAIP mask
+        class is 1-6 in original NAIP mask
 
         :return: The number of NAIP classes (6).
         """
@@ -41,7 +41,7 @@ class NAIPDataset(BaseSegmentationDataset):
         """
         Get the text for classes id.
 
-        :return: The list of WHDLD classes (6).
+        :return: The list of NAIP classes (6).
         """
         return ['baresoil', 'building', 'pavement', 'road', 'vegetation', 'water']
 

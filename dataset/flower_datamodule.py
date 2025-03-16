@@ -40,7 +40,8 @@ class FlowerDataModule(LightningDataModule):
             train_transforms = transforms.Compose([transforms.RandomResizedCrop(self.image_size),
                                                    transforms.RandomHorizontalFlip(),
                                                    transforms.ToTensor(),
-                                                   transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+                                                   transforms.Normalize((0.5, 0.5, 0.5),
+                                                                        (0.5, 0.5, 0.5))])
             self.train_dataset = ImageFolder(root=train_dir, transform=train_transforms)
             val_dir = os.path.join(self.data_dir, 'val')
             self.val_dataset = ImageFolder(root=val_dir, transform=self.transform)

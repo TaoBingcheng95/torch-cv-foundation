@@ -63,7 +63,6 @@ class VGG16(nn.Module):
         self.block6 = nn.Sequential(
             nn.Flatten(),
             # 使用自适应池化
-
             nn.Linear(in_features=512 * 7 * 7, out_features=4096),
             nn.ReLU(),
             nn.Dropout(p=0.5, inplace=False),

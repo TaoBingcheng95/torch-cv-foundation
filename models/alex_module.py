@@ -42,4 +42,5 @@ class AlexNetLightning(pl.LightningModule):
 
 
 if __name__ == '__main__':
-    pass
+    model = AlexNetLightning()
+    print(model)

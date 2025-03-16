@@ -71,7 +71,7 @@ class TianchiDataModule(LightningDataModule):
         """
         Initialize a `TianchiDataModule`.
 
-        :param data_dir: The data directory. Defaults to `"data/"`.
+        :param root: The data directory. Defaults to `"data/"`.
         :param train_val_test_split: The train, validation and test split. Defaults to `(55_000, 5_000, 10_000)`.
         :param batch_size: The batch size. Defaults to `64`.
         :param num_workers: The number of workers. Defaults to `0`.
@@ -81,6 +81,7 @@ class TianchiDataModule(LightningDataModule):
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
+        self.num_workers = None
         self.save_hyperparameters(logger=False)
 
         # data transformations

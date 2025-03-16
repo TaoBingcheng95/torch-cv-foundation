@@ -5,6 +5,8 @@ from lightning.pytorch import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
 
+from models.components import LeNet5
+
 
 class MNISTLitModule(LightningModule):
     """
@@ -229,4 +231,4 @@ class MNISTLitModule(LightningModule):
 
 
 if __name__ == "__main__":
-    _ = MNISTLitModule(None, None, None, None)
+    _ = MNISTLitModule(LeNet5, None, None, None)

@@ -4,10 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import timm
 
-try:
-    from torchinfo import summary
-except ImportError as e:
-    print(e)
+
 
 class ViT(nn.Module):
     def __init__(self, out_channels, vit_model='vit_base_patch16_224', pretrained=False):
@@ -72,6 +69,11 @@ class ViT(nn.Module):
 
 
 if __name__ == "__main__":
+
+    try:
+        from torchinfo import summary
+    except ImportError as e:
+        print(e)
     
     num_classes = 21
     model = ViT(out_channels=num_classes, 
@@ -79,10 +81,10 @@ if __name__ == "__main__":
                 pretrained=False)
 
     input_size = (1, 3, 512, 512)
-    x = torch.randn(input_size)
+    # x = torch.randn(input_size)
     # Forward pass
-    output = model(x)
-    print(output.shape)
+    # output = model(x)
+    # print(output.shape)
 
     summary(model, 
             input_size=input_size, 

@@ -329,10 +329,11 @@ def ObjectDetectionModel(model: str = 'faster-rcnn',
 
 
 if __name__ == '__main__':
-    model = SemanticSegmentationModel(model='unet', backbone='resnet50')
+    model = SemanticSegmentationModel(model='unet', backbone='resnet50', num_classes=10)
     # model = ClassificationModel(model='resnet50', weights=False)
-    batch_size = 16
-    summary(model, input_size=(batch_size, 3, 256, 256))
-
-    # print(isinstance(mm, Module))
-    # print(mm)
+    batch_size = 1
+    input_size = (batch_size, 3, 256, 256)
+    input_data = torch.randn(input_size)
+    output = model(input_data)
+    print(output.shape)
+    # summary(model, input_size=(batch_size, 3, 256, 256))

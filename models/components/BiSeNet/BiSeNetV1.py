@@ -10,8 +10,6 @@ from torch.nn import BatchNorm2d
 from .build_contextpath import build_contextpath
 
 
-
-
 class ConvBNReLU(nn.Module):
 
     def __init__(self, in_chan, out_chan, ks=3, stride=1, padding=1, *args, **kwargs):

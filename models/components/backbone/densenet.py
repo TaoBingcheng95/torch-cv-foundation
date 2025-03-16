@@ -1,11 +1,5 @@
-"""
-Author      : now more
-Contact     : lin.honghui@qq.com
-LastEditors: Please set LastEditors
-LastEditTime: 2020-11-28 07:50:11
-Description :
-"""
-import torch
+
+# import torch
 import torch.nn as nn
 import torchvision.models.densenet as densenet
 import torch.nn.functional as F
@@ -31,8 +25,7 @@ class densenet169(nn.Module):
 
 
 
-
-
-
 if __name__ == "__main__":
-    pass
+    import torchinfo
+    model = densenet121(pretrained=True)
+    torchinfo.summary(model,input_size=(1,3,224,224))

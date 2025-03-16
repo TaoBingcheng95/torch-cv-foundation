@@ -1,10 +1,10 @@
-'''
+"""
 Author      : now more
 Contact     : lin.honghui@qq.com
 LastEditors: Please set LastEditors
 LastEditTime: 2020-11-28 06:06:31
-Description : 
-'''
+Description :
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

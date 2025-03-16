@@ -53,7 +53,6 @@ def collate_fn(batch):
     return tuple(zip(*batch)) 
 
 
-
 class WheatDataset(Dataset):
     """
     定义WheatDataset 返回 图片，标签

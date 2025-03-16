@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, random_split
 import segmentation_models_pytorch as smp
 import matplotlib.pyplot as plt
 
-from dataset.components.my_dl import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
+from dataset.components.my_ds import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
 from trainers import BaseTrainer
 
 if __name__ == '__main__':

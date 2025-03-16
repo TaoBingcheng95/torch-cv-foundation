@@ -1,7 +1,7 @@
 import warnings
 import torch
 from torch import nn
-from torch.nn import BatchNorm2d
+# from torch.nn import BatchNorm2d
 
 from build_contextpath import build_contextpath
 # from models.components.BiSeNet.build_contextpath import build_contextpath

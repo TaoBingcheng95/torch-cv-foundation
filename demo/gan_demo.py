@@ -75,28 +75,28 @@ def train_gan(generator, discriminator, dataloader, num_epochs=50, lr=0.0002):
               f"Generator Loss: {gen_loss.item():.4f}, "
               f"Discriminator Loss: {real_loss.item() + fake_loss.item():.4f}")
 
-# 加载MNIST数据集
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
-mnist_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
-dataloader = DataLoader(mnist_dataset, batch_size=64, shuffle=True)
+if __name__ == "__main__":
+    # 加载MNIST数据集
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
+    mnist_dataset = datasets.MNIST(root='../data', train=True, transform=transform, download=True)
+    dataloader = DataLoader(mnist_dataset, batch_size=64, shuffle=True)
 
-# 创建生成器和判别器
-generator = Generator(input_size=100, output_size=28*28)
-discriminator = Discriminator(input_size=28*28)
+    # 创建生成器和判别器
+    generator = Generator(input_size=100, output_size=28*28)
+    discriminator = Discriminator(input_size=28*28)
 
-# 训练GAN
-train_gan(generator, discriminator, dataloader)
+    # 训练GAN
+    train_gan(generator, discriminator, dataloader)
 
-# 生成新样本并显示
-generator.eval()
-with torch.no_grad():
-    noise = torch.randn(16, 100)
-    generated_samples = generator(noise).view(-1, 28, 28).numpy()
+    # 生成新样本并显示
+    generator.eval()
+    with torch.no_grad():
+        noise = torch.randn(16, 100)
+        generated_samples = generator(noise).view(-1, 28, 28).numpy()
 
-plt.figure(figsize=(8, 8))
-for i in range(16):
-    plt.subplot(4, 4, i+1)
-    plt.imshow(generated_samples[i], cmap='gray')
-    plt.axis('off')
-plt.show()
-
+    plt.figure(figsize=(8, 8))
+    for i in range(16):
+        plt.subplot(4, 4, i+1)
+        plt.imshow(generated_samples[i], cmap='gray')
+        plt.axis('off')
+    plt.show()

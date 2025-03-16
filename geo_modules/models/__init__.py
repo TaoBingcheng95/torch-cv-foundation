@@ -15,7 +15,7 @@ from .dofa import (
     dofa_small_patch16_224,
 )
 from .farseg import FarSeg
-from .fcn import FCN
+from models.components.fcn import FCN
 from .fcsiam import FCSiamConc, FCSiamDiff
 from .rcf import RCF
 from .resnet import (
