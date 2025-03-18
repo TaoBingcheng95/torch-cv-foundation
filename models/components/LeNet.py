@@ -15,7 +15,8 @@ class LeNet5(nn.Module):
         super().__init__()
         self.feature = nn.Sequential(
             #1
-            nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5, stride=1, padding=padding),   # padding=2 for 28*28->32*32-->28*28
+            # padding=2 for 28*28->32*32-->28*28
+            nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5, stride=1, padding=padding),
             nn.Tanh(),
             nn.AvgPool2d(kernel_size=2, stride=2),  # 14*14
             #2
@@ -44,8 +45,10 @@ class Net(nn.Module):
     """
 
     def __init__(self, in_channels: int = 1, out_features: int = 10):
+        """
+        1 input image channel, 6 output channels, 5x5 square convolution
+        """
         super(Net, self).__init__()
-        # 1 input image channel, 6 output channels, 5x5 square convolution
         # kernel
         self.conv1 = nn.Conv2d(in_channels, 6, 5)
         self.conv2 = nn.Conv2d(6, 16, 5)
@@ -83,6 +86,7 @@ class Net(nn.Module):
         return outputs
 
 
+
 if __name__ == '__main__':
 
     try:
@@ -91,12 +95,12 @@ if __name__ == '__main__':
         print(e)
         exit()
 
-    model = Net() # LeNet5()
+    model = LeNet5() # Net()
     # print(net)
 
     input_size=(1, 1, 32, 32)
-    input_data = torch.randn(input_size)
-    output = model(input_data)
+    # input_data = torch.randn(input_size)
+    # output = model(input_data)
     # print(output.shape)
 
     summary(model,
@@ -106,4 +110,3 @@ if __name__ == '__main__':
             row_settings=['var_names'],
             verbose=True
             )
-

@@ -2,12 +2,10 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torchinfo import summary
-
 
 
 class OriginUnet(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels:int=3, num_classes:int=10):
         super().__init__()
 
         # parameters: in_channels, out_channels, kernel_size, padding
@@ -17,7 +15,7 @@ class OriginUnet(nn.Module):
 
         self.upconv3 = self.expand_block(128, 64, 3, 1)
         self.upconv2 = self.expand_block(64 * 2, 32, 3, 1)
-        self.upconv1 = self.expand_block(32 * 2, out_channels, 3, 1)
+        self.upconv1 = self.expand_block(32 * 2, num_classes, 3, 1)
 
     def forward(self, x):
         try:
@@ -59,6 +57,9 @@ class OriginUnet(nn.Module):
             nn.BatchNorm2d(out_channels),
             nn.ReLU()
         ]
+
+
+###################
 
 
 class ContractBlock(nn.Module):
@@ -160,7 +161,7 @@ class UNetClassificationTaskHead(nn.Module):
 
 
 class SimpleUNet(nn.Module):
-    def __init__(self, in_channels=3, num_classes=10):
+    def __init__(self, in_channels:int=3, num_classes:int=10):
         super(SimpleUNet, self).__init__()
         self.encoder = UNetEncoder(in_channels)
         self.decoder = UNetDecoder()
@@ -175,12 +176,18 @@ class SimpleUNet(nn.Module):
         return segmentation_output  # classification_output
 
 
-def unet_demo():
-    input_size = (1, 3, 512, 512)
+
+if __name__ == "__main__":
+    from torchinfo import summary
+
     model = SimpleUNet(in_channels=3, num_classes=5)
+    # model = OriginUnet(in_channels=3, num_classes=5)
+
+    input_size = (1, 3, 512, 512)
     # input_data = torch.randn(input_size)
     # output = model(input_data)
     # print(output.shape)
+
     summary(model,
             input_size=input_size,
             col_width=20,
@@ -188,9 +195,3 @@ def unet_demo():
             row_settings=['var_names'],
             verbose=True
             )
-
-
-
-if __name__ == "__main__":
-    unet_demo()
-

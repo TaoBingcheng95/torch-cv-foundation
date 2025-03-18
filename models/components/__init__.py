@@ -3,7 +3,6 @@ from .LeNet import LeNet5, Net
 from .AlexNet import AlexNet
 from .vit import ViT
 from .AttUNet import UNet
-from models.components.depredate.resnet import Resnet18
 from .BiSeNet import BiSeNetV1
 # from .densenet_1 import SimpleDenseNet, SimpleUNet
 from .unet import SimpleUNet
@@ -18,7 +17,6 @@ __all__ = ['LeNet5',
            'UNet',
            'SimpleDenseNet',
            'SimpleUNet',
-           'Resnet18',
            'BiSeNetV1',
            'FCN',
            'DenseNet']

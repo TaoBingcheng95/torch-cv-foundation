@@ -8,9 +8,11 @@ https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py
 """
 import torch
 import torch.nn as nn
-from torch.hub import load_state_dict_from_url
+# from torch.hub import load_state_dict_from_url
 # import torch.utils.model_zoo as modelzoo
 # from torch.nn import BatchNorm2d
+
+import torchvision.models.resnet as resnet
 
 
 model_urls = {
@@ -252,18 +254,26 @@ def build_resnet101(pretrained=False, progress=True, **kwargs):
     return _resnet('resnet101', Bottleneck, [3, 4, 23, 3], pretrained, progress,
                    **kwargs)
 
+
 class resnet50(nn.Module):
-    def __init__(self,pretrained=True,progress=True,**kwargs):
-        super(resnet50,self).__init__()
-        backbone = build_resnet50(pretrained=pretrained,progress=progress,**kwargs)
+    def __init__(self,weights=resnet.ResNet50_Weights.IMAGENET1K_V1,progress=True,**kwargs):
+        super(resnet50, self).__init__()
+        backbone = build_resnet50(weights=weights,
+                                  progress=progress,
+                                  **kwargs)
         self.backbone = nn.Sequential(*list(backbone.children())[:-2])
     def forward(self,x):
         return self.backbone(x)
 
+
 class resnet101(nn.Module):
-    def __init__(self,pretrained=True,progress=True,**kwargs):
+    def __init__(self,weights=resnet.ResNet101_Weights.IMAGENET1K_V1,
+                 progress=True,
+                 **kwargs):
         super(resnet101,self).__init__()
-        backbone = build_resnet101(pretrained=pretrained,progress=progress,**kwargs)
+        backbone = build_resnet101(weights=weights,
+                                   progress=progress,
+                                   **kwargs)
         self.backbone = nn.Sequential(*list(backbone.children())[:-2])
     def forward(self,x):
         return self.backbone(x)
