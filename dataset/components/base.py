@@ -17,7 +17,7 @@ class BaseSegmentationDataset(Dataset, ABC):
                  to_numpy=False,
                  normalize=True,
                  **kwargs):
-        super(BaseSegmentationDataset).__init__()
+        super().__init__()
         self.root = root
         self.transform = transform
         self.mean = (0.485, 0.456, 0.406)
@@ -90,7 +90,7 @@ class BaseSegmentationDataset(Dataset, ABC):
         plt.close()
 
 
-class BaseClassificationDataset:
+class BaseClassificationDataset(Dataset, ABC):
     def __init__(self, data_dir, transform, batch_size):
         self.data_dir = data_dir
         self.transform = transform

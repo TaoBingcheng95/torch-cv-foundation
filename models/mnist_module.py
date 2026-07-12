@@ -1,6 +1,7 @@
 from typing import Any, Dict, Tuple
 
 import torch
+
 from lightning.pytorch import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
@@ -60,7 +61,7 @@ class MNISTLitModule(LightningModule):
 
         # this line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
-        self.save_hyperparameters(logger=False,ignore=['net'])
+        self.save_hyperparameters(logger=False,ignore=['net']) # , 'optimizer', 'scheduler'
 
         self.net = net
 
@@ -133,8 +134,8 @@ class MNISTLitModule(LightningModule):
         # update and log metrics
         self.train_loss(loss)
         self.train_acc(preds, targets)
-        self.log("train_loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("train_acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
 
         # return loss or backpropagation will fail
         return loss
@@ -156,8 +157,8 @@ class MNISTLitModule(LightningModule):
         # update and log metrics
         self.val_loss(loss)
         self.val_acc(preds, targets)
-        self.log("val_loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self) -> None:
         """Lightning hook that is called when a validation epoch ends."""
@@ -165,7 +166,7 @@ class MNISTLitModule(LightningModule):
         self.val_acc_best(acc)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val_acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """
@@ -180,8 +181,8 @@ class MNISTLitModule(LightningModule):
         # update and log metrics
         self.test_loss(loss)
         self.test_acc(preds, targets)
-        self.log("test_loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test_acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
@@ -190,7 +191,14 @@ class MNISTLitModule(LightningModule):
         self.test_acc_best(acc)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("test_acc_best", self.test_acc_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("test/acc_best", self.test_acc_best.compute(), sync_dist=True, prog_bar=True)
+
+    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """推理步骤：返回概率分布"""
+        x, _ = batch
+        logits = self.forward(x)
+        probs = torch.softmax(logits, dim=1)
+        return probs
 
     def setup(self, stage: str) -> None:
         """
@@ -203,11 +211,16 @@ class MNISTLitModule(LightningModule):
         :param stage: Either `"fit"`, `"validate"`, `"test"`, or `"predict"`.
         """
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            # self.net = torch.compile(self.net)
+            try:
+                # 兼容性检查
+                self.net = torch.compile(self.net)
+            except (AttributeError, RuntimeError):
+                self.logger.warning("torch.compile not available, skipping compilation.")
+
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        """
-        Choose what optimizers and learning-rate schedulers to use in your optimization.
+        """Choose what optimizers and learning-rate schedulers to use in your optimization.
         Normally you'd need one. But in the case of GANs or similar you might have multiple.
 
         Examples:
@@ -215,14 +228,20 @@ class MNISTLitModule(LightningModule):
 
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
-        if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
+        # 如果外部传入了实例，直接使用
+        if self.hparams.get('optimizer') is not None:
+            optimizer = self.hparams.optimizer
+        else:
+            # 使用默认配置
+            optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        
+        if self.hparams.get('scheduler') is not None:
+            scheduler = self.hparams.scheduler
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": "val_loss",
+                    "monitor": "val/loss",
                     "interval": "epoch",
                     "frequency": 1,
                 },
@@ -231,4 +250,34 @@ class MNISTLitModule(LightningModule):
 
 
 if __name__ == "__main__":
-    _ = MNISTLitModule(LeNet5, None, None, None)
+
+    from torch.optim import Adam
+    from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+    
+    # 实例化网络
+    net = LeNet5(num_classes=10)
+    # optimizer = Adam
+    optimizer = Adam(net.parameters(), lr=1e-3)
+    scheduler = ReduceLROnPlateau(optimizer,  mode= 'min', factor= 0.1, patience= 10)
+
+    # 实例化模块
+    model = MNISTLitModule(
+        net=net,
+        optimizer=optimizer, 
+        scheduler=scheduler,
+        compile=False
+    )
+
+    # 测试 configure_optimizers
+    # 注意：此时 trainer 尚未绑定，但 self.parameters() 仍然可用
+    opt_config = model.configure_optimizers()
+    print(f"Optimizer: {type(opt_config['optimizer']).__name__}")
+    if 'lr_scheduler' in opt_config:
+        print(f"Scheduler: {type(opt_config['lr_scheduler']['scheduler']).__name__}")
+
+    # # 模拟 forward _pass
+    # dummy_input = torch.randn(4, 1, 32, 32)
+    # output = model(dummy_input)
+    # print(f"Output shape: {output.shape}")  # 应输出: torch.Size([4, 10])
+    
+

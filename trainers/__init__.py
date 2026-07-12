@@ -16,7 +16,7 @@
 # from .simclr import SimCLRTask
 from .basetrainer import BaseTrainer
 
-from .logger_utils import setup_logging
+# from .logger_utils import setup_logging
 
 __all__ = (
     # Supervised
@@ -36,7 +36,7 @@ __all__ = (
     # Other
     # 'IOBenchTask',
     # utilities
-    'setup_logging',
+    # 'setup_logging',
     # 'get_model',
     # 'get_model_weights',
     # 'get_weight',

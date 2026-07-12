@@ -1,10 +1,12 @@
 from typing import Any, Dict, Optional, Tuple
 
 import torch
-from lightning.pytorch import LightningDataModule
 from torch.utils.data import ConcatDataset, DataLoader, Dataset, random_split
 from torchvision.datasets import MNIST
 from torchvision.transforms import transforms
+
+from lightning.pytorch import LightningDataModule
+
 
 _DEFAULT_MNIST_BATCH_SIZE = 32
 _DEFAULT_RESIZE_SIZE = 32
@@ -58,8 +60,9 @@ class MNISTDataModule(LightningDataModule):
 
     def __init__(
         self,
-        data_dir: str = "data/",
+        data_dir: str = "./data",
         train_val_test_split: Tuple[int, int, int] = (55_000, 5_000, 10_000),
+        train_val_split: Tuple[int, int] = (55_000, 5_000), # 只分割训练集
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
@@ -83,8 +86,8 @@ class MNISTDataModule(LightningDataModule):
         # data transformations
         if resize_32:
             self.transforms = transforms.Compose(
-                [transforms.ToTensor(),
-                 transforms.Resize((_DEFAULT_RESIZE_SIZE, _DEFAULT_RESIZE_SIZE)),
+                [transforms.Resize((_DEFAULT_RESIZE_SIZE, _DEFAULT_RESIZE_SIZE)),
+                 transforms.ToTensor(),
                  transforms.Normalize((0.1307,), (0.3081,))]
             )
         else:
@@ -140,14 +143,31 @@ class MNISTDataModule(LightningDataModule):
             self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
 
         # load and split datasets only if not loaded already
-        if not self.data_train and not self.data_val and not self.data_test:
-            trainset = MNIST(self.hparams.data_dir, train=True, transform=self.transforms)
-            testset = MNIST(self.hparams.data_dir, train=False, transform=self.transforms)
-            dataset = ConcatDataset(datasets=[trainset, testset])
-            self.data_train, self.data_val, self.data_test = random_split(
-                dataset=dataset,
-                lengths=self.hparams.train_val_test_split,
-                generator=torch.Generator().manual_seed(42),
+        # if not self.data_train and not self.data_val and not self.data_test:
+        #     trainset = MNIST(self.hparams.data_dir, train=True, transform=self.transforms)
+        #     testset = MNIST(self.hparams.data_dir, train=False, transform=self.transforms)
+        #     dataset = ConcatDataset(datasets=[trainset, testset])
+        #     self.data_train, self.data_val, self.data_test = random_split(
+        #         dataset=dataset,
+        #         lengths=self.hparams.train_val_test_split,
+        #         generator=torch.Generator().manual_seed(42),
+        #     )
+        if self.data_train is None and self.data_val is None and self.data_test is None:
+            self.data_test = MNIST(
+                self.hparams.data_dir, 
+                train=False, 
+                transform=self.transforms
+            )
+            full_train_set = MNIST(
+                self.hparams.data_dir, 
+                train=True, 
+                transform=self.transforms
+            )
+            # random_split 返回的是 Subset 对象，它们会自动继承 full_train_set 的 transform
+            self.data_train, self.data_val = random_split(
+                dataset=full_train_set,
+                lengths=self.hparams.train_val_split,
+                generator=torch.Generator().manual_seed(42), # 固定种子保证复现
             )
 
     def train_dataloader(self) -> DataLoader[Any]:
@@ -176,7 +196,7 @@ class MNISTDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            drop_last=True,
+            drop_last=False,
             shuffle=False,
         )
 
@@ -191,7 +211,7 @@ class MNISTDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            drop_last=True,
+            drop_last=False,
             shuffle=False,
         )
 
@@ -201,7 +221,7 @@ class MNISTDataModule(LightningDataModule):
                           batch_size=self.batch_size_per_device,
                           num_workers=self.hparams.num_workers,
                           pin_memory=self.hparams.pin_memory,
-                          drop_last=True,
+                          drop_last=False,
                           shuffle=False,
                           )
 
@@ -234,4 +254,15 @@ class MNISTDataModule(LightningDataModule):
 
 
 if __name__ == "__main__":
-    _ = MNISTDataModule()
+    dm = MNISTDataModule(data_dir='data', batch_size=16)
+    dm.prepare_data()
+    dm.setup(stage="fit")
+    
+    print(f"Train: {len(dm.data_train)}, Val: {len(dm.data_val)}, Test: {len(dm.data_test)}")
+    
+    # 验证 batch 形状
+    train_loader = dm.train_dataloader()
+    x, y = next(iter(train_loader))
+    print(f"Batch shape: {x.shape}, Target shape: {y.shape}")
+    # 如果 resize_32=True, 输出应为 torch.Size([32, 1, 32, 32])
+    

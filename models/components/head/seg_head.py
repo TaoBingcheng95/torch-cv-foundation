@@ -12,7 +12,7 @@ class GenericSegmentationHead(nn.Module):
         :param num_classes: 分割任务的类别数
         :param target_resolution: 目标输出分辨率 (H, W)
         """
-        super(GenericSegmentationHead, self).__init__()
+        super().__init__()
         self.target_resolution = target_resolution
 
         # 上采样倍数和层数

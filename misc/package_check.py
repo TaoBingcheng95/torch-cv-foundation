@@ -4,8 +4,6 @@ import numpy
 import scipy
 import torch
 
-
-
 # 设置 CUDA 可见设备
 # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -80,10 +78,13 @@ def extent_package():
     except ImportError as e:
         print(e)
 
-    import segmentation_models_pytorch as smp
-    import timm
-    print(f"segmentation_models_pytorch Version : {smp.__version__}")
-    print(f"timm Version : {timm.__version__}")
+    try:
+        import segmentation_models_pytorch as smp
+        import timm
+        print(f"segmentation_models_pytorch Version : {smp.__version__}")
+        print(f"timm Version : {timm.__version__}")
+    except ImportError as e:
+        print(e)
 
 
 

@@ -9,6 +9,7 @@ def make_one_hot(labels, classes):
     target = one_hot.scatter_(1, labels.data, 1)
     return target
 
+
 def dice_coeff(inputs: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon=1e-6):
     # Average of Dice coefficient for all batches, or for a single mask
     assert inputs.size() == target.size()
@@ -76,4 +77,3 @@ class CE_DiceLoss(nn.Module):
         CE_loss = self.cross_entropy(output, target)
         dice_loss = self.dice(output, target)
         return CE_loss + dice_loss
-

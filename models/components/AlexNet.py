@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.components.head.seg_head import GenericSegmentationHead
+# from models.components.head.seg_head import GenericSegmentationHead
 
 class AlexNet(nn.Module):
     """
@@ -11,10 +11,6 @@ class AlexNet(nn.Module):
                  num_classes: int = 1000,
                  dropout: float = 0.5,
                  init_weights: bool = True) -> None:
-        """
-        dropout : Dropout概率，默认为	0.5
-        init_weights : 是否自动初始化权重，默认为True
-        """
         super().__init__()
         self.features = nn.Sequential(
             # nn.Conv2d(in_channels, 64, kernel_size=11, stride=4, padding=2), # 原版参数
@@ -43,9 +39,9 @@ class AlexNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(4096, num_classes),
         )
-        self.seg_head = GenericSegmentationHead(in_channels=256,
-                                                num_classes=num_classes,
-                                                target_resolution=(224, 224))
+        # self.seg_head = GenericSegmentationHead(in_channels=256,
+        #                                         num_classes=num_classes,
+        #                                         target_resolution=(224, 224))
         if init_weights:
             self._initialize_weights()
 
@@ -54,8 +50,6 @@ class AlexNet(nn.Module):
         x = self.avgpool(x) # 1, 256, 6, 6
         x = torch.flatten(x, 1) # 1, 9216
         x = self.classifier(x)
-        # _, features_channel, h, w = x.shape
-        # x = self.seg_head(x, (h, w))
         return x
 
     def _initialize_weights(self):
@@ -82,8 +76,8 @@ if __name__ == '__main__':
         print(e)
         exit()
 
-    model = AlexNet(in_channels=1, num_classes=10)
-    input_size=(1, 1, 32, 32)
+    model = AlexNet(in_channels=3, num_classes=10)
+    input_size = (1, 3, 224, 224)
     # input_data = torch.randn(input_size)
     # output = model(input_data)
     # print(output.shape)

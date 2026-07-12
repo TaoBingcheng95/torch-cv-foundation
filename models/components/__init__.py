@@ -1,5 +1,5 @@
 
-from .LeNet import LeNet5, Net
+from .LeNet import LeNet5
 from .AlexNet import AlexNet
 from .vit import ViT
 from .AttUNet import UNet
@@ -12,7 +12,7 @@ from .fcn import FCN
 from .DenseNet import DenseNet
 
 __all__ = ['LeNet5',
-           'Net',
+        #    'Net',
            'AlexNet',
            'UNet',
            'SimpleDenseNet',

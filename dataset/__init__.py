@@ -1,8 +1,12 @@
-from .components.base import BaseSegmentationDataset
+
+from .components import MNISTDataLoader
+
+
 from .mnist_datamodule import MNISTDataModule
-from .tianchi_datamodule import TianchiDataModule
+# from .tianchi_datamodule import TianchiDataModule
 
 __all__  = [
+    'MNISTDataLoader',  
     'MNISTDataModule',
-    'TianchiDataModule'
+    # 'TianchiDataModule'
 ]

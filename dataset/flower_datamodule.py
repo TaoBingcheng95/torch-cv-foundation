@@ -1,8 +1,10 @@
 import os
+
 from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
-from pytorch_lightning import LightningDataModule
+
+from lightning.pytorch import LightningDataModule
 
 
 class FlowerDataModule(LightningDataModule):
