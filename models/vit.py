@@ -5,10 +5,10 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 import timm
-import segmentation_models_pytorch as smp
-from tqdm import tqdm
-import numpy as np
-from pprint import pprint
+# import segmentation_models_pytorch as smp
+# from tqdm import tqdm
+# import numpy as np
+# from pprint import pprint
 
 class ViT(nn.Module):
     def __init__(self, out_channels, vit_model='vit_base_patch16_224', pretrained=False):

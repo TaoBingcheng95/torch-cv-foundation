@@ -22,7 +22,7 @@ import segmentation_models_pytorch as smp
 import timm
 
 from components import FCN
-from models.utils import extract_backbone, load_state_dict, modify_resnet
+from .utils.utils import extract_backbone, load_state_dict, modify_resnet
 # from models.components import get_weight
 
 
@@ -49,6 +49,7 @@ BACKBONE_WEIGHT_MAP = {
     'wide_resnet50_2': R.Wide_ResNet50_2_Weights.DEFAULT,
     'wide_resnet101_2': R.Wide_ResNet101_2_Weights.DEFAULT,
 }
+
 
 def SemanticSegmentationModel(model: str ="unet",
                               backbone: str ="resnet50",
@@ -150,6 +151,7 @@ def SemanticSegmentationModel(model: str ="unet",
     return seg_model
 
 
+
 def ClassificationModel(model: str = 'resnet50',
                         weights: WeightsEnum | str | bool | None = None,
                         in_channels: int = 3,
@@ -206,6 +208,7 @@ def ClassificationModel(model: str = 'resnet50',
         for param in cls_model.get_classifier().parameters():
             param.requires_grad = True
     return cls_model
+
 
 
 def ObjectDetectionModel(model: str = 'faster-rcnn',
@@ -326,6 +329,7 @@ def ObjectDetectionModel(model: str = 'faster-rcnn',
     else:
         raise ValueError(f"Model type '{model}' is not valid.")
     return det_model
+
 
 
 if __name__ == '__main__':

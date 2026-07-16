@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data import DataLoader, random_split
 
 from dataset.components.custom_ds import UTKFace
-from models.HydraNet import HydraNet
+from models.deprecated.HydraNet import HydraNet
 
 if __name__ == '__main__':
 

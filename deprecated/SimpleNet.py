@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torchinfo import summary
 
 
+
 class Net(nn.Module):
 
     def __init__(self):

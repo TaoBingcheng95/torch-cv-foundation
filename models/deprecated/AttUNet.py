@@ -25,10 +25,10 @@ class AttentionBlock(nn.Module):
 
 
 # UNet
-class UNet(nn.Module):
+class UNetV1(nn.Module):
     def __init__(self, in_channels, out_channels, use_attention=False):
-        super(UNet, self).__init__()
-        self.use_attention = use_attention
+        super().__init__()
+        # self.use_attention = use_attention
         
         # Encoder path (downsampling)
         self.enc1 = self.conv_block(in_channels, 64)
@@ -121,7 +121,7 @@ class UNet(nn.Module):
 
 if __name__ == "__main__":
     # For a single-channel output (e.g., binary segmentation)
-    model = UNet(in_channels=3, out_channels=2, use_attention=True)  
+    model = UNetV1(in_channels=3, out_channels=2, use_attention=True)  
     # Example input tensor (batch_size, channels, height, width)
     input_size = (1, 3, 512, 512)
     x = torch.randn(input_size)  

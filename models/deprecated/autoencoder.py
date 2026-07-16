@@ -4,15 +4,16 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-import lightning.pytorch as pl
+# import lightning.pytorch as pl
 
 
-class LitAutoEncoder(pl.LightningModule):
+class LitAutoEncoder(nn.Module): # pl.LightningModule
     def __init__(self):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(28 * 28, 128),
@@ -58,6 +59,8 @@ class Encoder(torch.nn.Module):
         super().__init__()
         self.fc1 = torch.nn.Linear(28 * 28, 128)
         self.fc2 = torch.nn.Linear(128, 64)
+        self.fc3 = torch.nn.Linear(64, 32)
+        self.fc3 = torch.nn.Linear(32, 16)
 
     def forward(self, x):
         x = torch.relu(self.fc1(x))
@@ -88,7 +91,7 @@ class AutoEncoder(torch.nn.Module):
         return x_hat
 
 
-class AutoEncoderModules(pl.LightningModule):
+class AutoEncoderModules(nn.Module): #pl.LightningModule
     def __init__(self, auto_encoder):
         super().__init__()
         self.auto_encoder = auto_encoder
@@ -131,35 +134,35 @@ if __name__ == "__main__":
     # print(output.shape)
     # summary(autoencoder, input_size=input_size)
 
-    # setup data
-    dataset = MNIST("../data", download=True, transform=ToTensor())
-    train_loader = DataLoader(dataset)
-    x, y = next(iter(train_loader))
-    # xx = x.view(28, 28).cpu().numpy()
-    # plt.title(f'{y.cpu().numpy()[0]}')
-    # plt.imshow((255*xx).astype(np.uint8), cmap='gray')
+    # # setup data
+    # dataset = MNIST("../data", download=True, train=True, transform=ToTensor())
+    # train_loader = DataLoader(dataset)
+    # x, y = next(iter(train_loader))
+    # # xx = x.view(28, 28).cpu().numpy()
+    # # plt.title(f'{y.cpu().numpy()[0]}')
+    # # plt.imshow((255*xx).astype(np.uint8), cmap='gray')
+    # # plt.show()
+
+    # # train the model (hint: here are some helpful Trainer arguments for rapid idea iteration)
+    # trainer = pl.Trainer(limit_train_batches=100, max_epochs=100)
+    # # trainer.fit(model=autoencoder, train_dataloaders=train_loader)
+    # # load checkpoint
+    # checkpoint = "./lightning_logs/version_2/checkpoints/epoch=99-step=10000.ckpt"
+    # net = LitAutoEncoder.load_from_checkpoint(checkpoint).to(device=autoencoder.device) # , encoder=encoder, decoder=decoder
+
+    # # choose your trained nn.Module
+    # encoder = net.encoder
+    # encoder.eval()
+
+    # # # embed 4 fake images!
+    # # fake_image_batch = torch.rand(4, 28 * 28, device=autoencoder.device)
+    # # embeddings = encoder(fake_image_batch)
+    # # print("⚡" * 20, "\nPredictions (4 image embeddings):\n", embeddings, "\n", "⚡" * 20)
+
+    # result = encoder(x.to(autoencoder.device).view(x.size(0), -1))
+    # pred = net.decoder(result).view(28,28)
+
+    # fig, axis = plt.subplots(1,2)
+    # axis[0].imshow(x[0].view(28,28))
+    # axis[1].imshow(pred.cpu().detach().numpy())
     # plt.show()
-
-    # train the model (hint: here are some helpful Trainer arguments for rapid idea iteration)
-    trainer = pl.Trainer(limit_train_batches=100, max_epochs=100)
-    # trainer.fit(model=autoencoder, train_dataloaders=train_loader)
-    # load checkpoint
-    checkpoint = "./lightning_logs/version_2/checkpoints/epoch=99-step=10000.ckpt"
-    net = LitAutoEncoder.load_from_checkpoint(checkpoint).to(device=autoencoder.device) # , encoder=encoder, decoder=decoder
-
-    # choose your trained nn.Module
-    encoder = net.encoder
-    encoder.eval()
-
-    # # embed 4 fake images!
-    # fake_image_batch = torch.rand(4, 28 * 28, device=autoencoder.device)
-    # embeddings = encoder(fake_image_batch)
-    # print("⚡" * 20, "\nPredictions (4 image embeddings):\n", embeddings, "\n", "⚡" * 20)
-
-    result = encoder(x.to(autoencoder.device).view(x.size(0), -1))
-    pred = net.decoder(result).view(28,28)
-
-    fig, axis = plt.subplots(1,2)
-    axis[0].imshow(x[0].view(28,28))
-    axis[1].imshow(pred.cpu().detach().numpy())
-    plt.show()

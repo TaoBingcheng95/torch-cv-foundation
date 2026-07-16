@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 
-from models.components import LeNet5
+from models import LeNet5
 
 mnist_transform = transforms.Compose(
     [transforms.ToTensor(),
