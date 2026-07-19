@@ -1,6 +1,4 @@
-import re
 from collections import OrderedDict
-from functools import partial
 from typing import Any, Optional
 
 import torch
@@ -10,16 +8,12 @@ import torch.utils.checkpoint as cp
 from torch import Tensor
 from torchvision.models import WeightsEnum
 
+from .utils.pytorch_api import _load_state_dict
 try:
     from .utils.pytorch_api import _ovewrite_named_param
 except ImportError as e:
     _ovewrite_named_param = None
 
-# from ..transforms._presets import ImageClassification
-# from ..utils import _log_api_usage_once
-# from ._api import register_model, Weights, WeightsEnum
-# from ._meta import _IMAGENET_CATEGORIES
-# from ._utils import _ovewrite_named_param, handle_legacy_interface
 
 __all__ = [
     "DenseNet",
@@ -31,23 +25,28 @@ __all__ = [
 
 
 class _DenseLayer(nn.Module):
+    """DenseNet 的基本单元：BN -> ReLU -> 1x1 Conv -> BN -> ReLU -> 3x3 Conv"""
     def __init__(
         self, num_input_features: int, growth_rate: int, bn_size: int, drop_rate: float, memory_efficient: bool = False
     ) -> None:
         super().__init__()
         self.norm1 = nn.BatchNorm2d(num_input_features)
         self.relu1 = nn.ReLU(inplace=True)
+        # # 1x1 卷积降维 (Bottleneck)，控制计算量
         self.conv1 = nn.Conv2d(num_input_features, bn_size * growth_rate, kernel_size=1, stride=1, bias=False)
 
         self.norm2 = nn.BatchNorm2d(bn_size * growth_rate)
         self.relu2 = nn.ReLU(inplace=True)
+        # 3x3 卷积提取特征，输出 growth_rate 个通道
         self.conv2 = nn.Conv2d(bn_size * growth_rate, growth_rate, kernel_size=3, stride=1, padding=1, bias=False)
 
         self.drop_rate = float(drop_rate)
         self.memory_efficient = memory_efficient
 
     def bn_function(self, inputs: list[Tensor]) -> Tensor:
+        # 【核心体现】：将传入的 List 中的所有 Tensor 在通道维度 (dim=1) 拼接起来
         concated_features = torch.cat(inputs, 1)
+        # 拼接后，送入 1x1 卷积进行降维 (Bottleneck)
         bottleneck_output = self.conv1(self.relu1(self.norm1(concated_features)))  # noqa: T484
         return bottleneck_output
 
@@ -76,15 +75,16 @@ class _DenseLayer(nn.Module):
     # torchscript does not yet support *args, so we overload method
     # allowing it to take either a List[Tensor] or single Tensor
     def forward(self, input: Tensor) -> Tensor:  # noqa: F811
+        # 核心：输出（在_DenseBlock中实现）与输入在通道维度拼接
         if isinstance(input, Tensor):
             prev_features = [input]
         else:
             prev_features = input
-
+        
+        # bn_function 负责输入拼接
         if self.memory_efficient and self.any_requires_grad(prev_features):
             if torch.jit.is_scripting():
                 raise Exception("Memory Efficient not supported in JIT")
-
             bottleneck_output = self.call_checkpoint_bottleneck(prev_features)
         else:
             bottleneck_output = self.bn_function(prev_features)
@@ -93,6 +93,7 @@ class _DenseLayer(nn.Module):
         if self.drop_rate > 0:
             new_features = F.dropout(new_features, p=self.drop_rate, training=self.training)
         return new_features
+
 
 
 class _DenseBlock(nn.ModuleDict):
@@ -119,20 +120,31 @@ class _DenseBlock(nn.ModuleDict):
             self.add_module("denselayer%d" % (i + 1), layer)
 
     def forward(self, init_features: Tensor) -> Tensor:
+        """
+        features.append() 和最后的 torch.cat(features, 1) 实现输出拼接
+        """
+         # 初始化一个列表，把初始特征放进去
         features = [init_features]
         for name, layer in self.items():
+            # 将【前面所有层累积的特征列表】传给当前层
             new_features = layer(features)
+            #【核心体现】：将当前层新产生的输出，追加到列表中
+            # 这就意味着当前层的输出，成为了后面所有层的“输入”的一部分
             features.append(new_features)
+        #【核心体现】：Block 结束时，将列表中所有的特征在通道维度(dim=1)拼接起来
         return torch.cat(features, 1)
 
 
+
 class _Transition(nn.Sequential):
+    """过渡层：用于两个 DenseBlock 之间，负责下采样和通道数压缩"""
     def __init__(self, num_input_features: int, num_output_features: int) -> None:
         super().__init__()
         self.norm = nn.BatchNorm2d(num_input_features)
         self.relu = nn.ReLU(inplace=True)
         self.conv = nn.Conv2d(num_input_features, num_output_features, kernel_size=1, stride=1, bias=False)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2)
+
 
 
 class DenseNet(nn.Module):
@@ -219,33 +231,14 @@ class DenseNet(nn.Module):
         return out
 
 
-def _load_state_dict(model: nn.Module, weights: WeightsEnum, progress: bool) -> None:
-    # '.'s are no longer allowed in module names, but previous _DenseLayer
-    # has keys 'norm.1', 'relu.1', 'conv.1', 'norm.2', 'relu.2', 'conv.2'.
-    # They are also in the checkpoints in model_urls. This pattern is used
-    # to find such keys.
-    pattern = re.compile(
-        r"^(.*denselayer\d+\.(?:norm|relu|conv))\.((?:[12])\.(?:weight|bias|running_mean|running_var))$"
-    )
-
-    state_dict = weights.get_state_dict(progress=progress, check_hash=True)
-    for key in list(state_dict.keys()):
-        res = pattern.match(key)
-        if res:
-            new_key = res.group(1) + res.group(2)
-            state_dict[new_key] = state_dict[key]
-            del state_dict[key]
-    model.load_state_dict(state_dict)
-
 
 def _densenet(
     growth_rate: int,
     block_config: tuple[int, int, int, int],
     num_init_features: int,
-    weights: Optional[WeightsEnum],
-    progress: bool,
-    **kwargs: Any,
-) -> DenseNet:
+    weights: Optional[WeightsEnum]=None,
+    progress: bool=False,
+    **kwargs: Any,) -> DenseNet:
     if weights is not None and _ovewrite_named_param:
         _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
 
@@ -255,6 +248,7 @@ def _densenet(
         _load_state_dict(model=model, weights=weights, progress=progress)
 
     return model
+
 
 
 def densenet121(**kwargs: Any) -> DenseNet:
@@ -302,6 +296,7 @@ def densenet161(**kwargs: Any) -> DenseNet:
     return _densenet(48, (6, 12, 36, 24), 96, None, False, **kwargs)
 
 
+
 def densenet169(**kwargs: Any) -> DenseNet:
     r"""Densenet-169 model from
     `Densely Connected Convolutional Networks <https://arxiv.org/abs/1608.06993>`_.
@@ -322,7 +317,6 @@ def densenet169(**kwargs: Any) -> DenseNet:
         :members:
     """
     return _densenet(32, (6, 12, 32, 32), 64, None, False, **kwargs)
-
 
 
 

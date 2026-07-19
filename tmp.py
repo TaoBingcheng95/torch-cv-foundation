@@ -3,22 +3,26 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from torchvision.models import VGG, ResNet, DenseNet
-from segmentation_models_pytorch import Unet
-import segmentation_models_pytorch as smp
+from models.deeplab3plus import DeepLabV3Plus
+from models.backbone import ResNet18Encoder, VGG16Encoder, MobileNetV2Encoder
+# from models.unet import UNet_ResNet18, UNet_MobileNetV2, UNet
+from models.convext import convnext_base
 
 
 
 if __name__ == '__main__':
     from torchinfo import summary
-
-    model = smp.Unet(
-        encoder_name="resnet34", # 编码器骨干网络
-        encoder_weights=None, # 使用ImageNet预训练权重
-        in_channels=3, # 输入通道数（RGB为3，灰度图为1）
-        classes=2 # 输出类别数
-        )
     
-    input_size = (1,3,244,244)
+    # 通道数现在由 backbone.out_channels 自动推导，无需手动传入
+    # VGG16Encoder()       → low_level=128, high_level=512
+    # MobileNetV2Encoder() → low_level=24,  high_level=96
+    # ResNet18Encoder()    → low_level=64,  high_level=256
+    # model = DeepLabV3Plus(MobileNetV2Encoder())
+    model  = convnext_base()
+
+    input_size = (1,3,224,224)
+    # dummy_input = torch.randn(input_size)
+    # o = model(dummy_input)
+    # print(o.shape)
+
     summary(model, input_size=input_size)
-            

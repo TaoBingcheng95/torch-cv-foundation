@@ -13,9 +13,13 @@ from typing import Callable, List, Optional, Sequence, Any
 
 import torch
 from torch import nn, Tensor
-from torchvision.models import WeightsEnum
+from torchvision.models import WeightsEnum, MobileNet_V3_Small_Weights, MobileNet_V3_Large_Weights
 
 from .utils.pytorch_api import _make_divisible, Conv2dNormActivation
+try:
+    from .utils.pytorch_api import _ovewrite_named_param
+except ImportError as e:
+    _ovewrite_named_param = None
 
 __all__ = [
     "MobileNetV3",
@@ -25,7 +29,7 @@ __all__ = [
 
 
 # SElayer
-class SqueezeExcitation(torch.nn.Module):
+class SqueezeExcitation(nn.Module):
     """
     This block implements the Squeeze-and-Excitation block from https://arxiv.org/abs/1709.01507 (see Fig. 1).
     Parameters ``activation``, and ``scale_activation`` correspond to ``delta`` and ``sigma`` in eq. 3.
@@ -45,9 +49,9 @@ class SqueezeExcitation(torch.nn.Module):
         scale_activation: Callable[..., torch.nn.Module] = torch.nn.Sigmoid,
     ) -> None:
         super().__init__()
-        self.avgpool = torch.nn.AdaptiveAvgPool2d(1)
-        self.fc1 = torch.nn.Conv2d(input_channels, squeeze_channels, 1)
-        self.fc2 = torch.nn.Conv2d(squeeze_channels, input_channels, 1)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(input_channels, squeeze_channels, 1)
+        self.fc2 = nn.Conv2d(squeeze_channels, input_channels, 1)
         self.activation = activation()
         self.scale_activation = scale_activation()
 
@@ -319,21 +323,25 @@ def _mobilenet_v3_conf(
 def _mobilenet_v3(
     inverted_residual_setting: List[InvertedResidualConfig],
     last_channel: int,
-    weights: Optional[WeightsEnum],
-    progress: bool,
+    weights: Optional[WeightsEnum]=None,
+    progress: bool=False,
     **kwargs: Any,
 ) -> MobileNetV3:
-    # if weights is not None:
-    #     _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
+    if weights is not None:
+        _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
 
     model = MobileNetV3(inverted_residual_setting, last_channel, **kwargs)
-
+    if weights is not None:
+        model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True))
     return model
 
 
 
 def mobilenet_v3_large(
-    *, weights = None, progress: bool = False, **kwargs: Any
+    *, 
+    weights: Optional[MobileNet_V3_Large_Weights]  = None, 
+    progress: bool = False, 
+    **kwargs: Any
 ) -> MobileNetV3:
     """
     Constructs a large MobileNetV3 architecture from
@@ -362,7 +370,10 @@ def mobilenet_v3_large(
 
 
 def mobilenet_v3_small(
-    *, weights = None, progress: bool = False, **kwargs: Any
+    *, 
+    weights: Optional[MobileNet_V3_Small_Weights] = None, 
+    progress: bool = False, 
+    **kwargs: Any
 ) -> MobileNetV3:
     """
     Constructs a small MobileNetV3 architecture from
@@ -392,6 +403,6 @@ def mobilenet_v3_small(
 if __name__ == '__main__':
     from torchinfo import summary
     model = mobilenet_v3_small()
-    input_size = (1,3,244,244)
+    input_size = (1,3,224,224)
     # summary(model, input_size=input_size)
     print(model.features)

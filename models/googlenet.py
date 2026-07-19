@@ -305,7 +305,6 @@ class GoogLeNet(nn.Module):
 
 def build_googlenet(weights: Optional[GoogLeNet_Weights] = None, progress: bool = True, **kwargs: Any) -> GoogLeNet:
 
-
     weights = GoogLeNet_Weights.verify(weights)
 
     original_aux_logits = kwargs.get("aux_logits", False)

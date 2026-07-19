@@ -11,6 +11,7 @@ def conv3x3(in_channels, out_channels, stride=1, dilation=1):
 def conv1x1(in_channels, out_channels, stride=1):
     return nn.Conv2d(in_channels, out_channels, kernel_size=1,stride=stride,bias=False)
 
+
 class BasicBlock(nn.Module):
     expansion = 1
     def __init__(self,in_channels,out_channels,stride=1,downsample=None,dilation=1):
@@ -38,6 +39,7 @@ class BasicBlock(nn.Module):
         out += residual
         out = self.relu(out)
         return out
+
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -71,6 +73,7 @@ class Bottleneck(nn.Module):
         out += residual
         out = self.relu(out)
         return out
+
 
 class ResNet(nn.Module):
     def __init__(self,block,layers,num_classes=1000,zero_init_residual=False,norm_layer=nn.BatchNorm2d,replace_stride_with_dilation=None):
@@ -143,25 +146,31 @@ class ResNet(nn.Module):
 
         return x1,x2,x3,x4
 
+
 def resnet18(**kwargs):
     model = ResNet(BasicBlock,[2,2,2,2],replace_stride_with_dilation=[False,True,True],**kwargs)
     return model
+
 
 def resnet34(**kwargs):
     model = ResNet(BasicBlock,[3,4,6,4],replace_stride_with_dilation=[False,True,True],**kwargs)
     return model
 
+
 def resnet50(**kwargs):
     model = ResNet(Bottleneck,[3,4,6,3],replace_stride_with_dilation=[False,True,True],**kwargs)
     return model
+
 
 def resnet101(**kwargs):
     model = ResNet(Bottleneck,[3,4,23,3],replace_stride_with_dilation=[False,True,True],**kwargs)
     return model
 
+
 def resnet152(**kwargs):
     model = ResNet(Bottleneck,[3,8,36,3],replace_stride_with_dilation=[False,True,True],**kwargs)
     return model
+
 
 if __name__ == '__main__':
     model = resnet18()

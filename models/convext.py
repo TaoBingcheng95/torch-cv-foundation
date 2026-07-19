@@ -7,7 +7,13 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 
+from torchvision.models import WeightsEnum, ConvNeXt_Tiny_Weights, ConvNeXt_Small_Weights,ConvNeXt_Base_Weights, ConvNeXt_Large_Weights
+
 from .utils.pytorch_api import Conv2dNormActivation, Permute, StochasticDepth
+try:
+    from .utils.pytorch_api import _ovewrite_named_param
+except ImportError as e:
+    _ovewrite_named_param = None
 
 
 __all__ = [
@@ -17,7 +23,6 @@ __all__ = [
     "convnext_base",
     "convnext_large",
 ]
-
 
 
 
@@ -176,14 +181,23 @@ class ConvNeXt(nn.Module):
 def _convnext(
     block_setting: List[CNBlockConfig],
     stochastic_depth_prob: float,
+    weights: Optional[WeightsEnum]=None,
+    progress: bool= False,
     **kwargs: Any,
 ) -> ConvNeXt:
+    if weights is not None:
+        _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
     model = ConvNeXt(block_setting, stochastic_depth_prob=stochastic_depth_prob, **kwargs)
+    if weights is not None:
+        model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True))
     return model
 
 
 
-def convnext_tiny(**kwargs: Any) -> ConvNeXt:
+def convnext_tiny(*,
+                  weights: Optional[ConvNeXt_Tiny_Weights] = None, 
+                  progress: bool = True,
+                  **kwargs: Any) -> ConvNeXt:
     """ConvNeXt Tiny model architecture from the
     `A ConvNet for the 2020s <https://arxiv.org/abs/2201.03545>`_ paper.
 
@@ -208,11 +222,14 @@ def convnext_tiny(**kwargs: Any) -> ConvNeXt:
         CNBlockConfig(768, None, 3),
     ]
     stochastic_depth_prob = kwargs.pop("stochastic_depth_prob", 0.1)
-    return _convnext(block_setting, stochastic_depth_prob, **kwargs)
+    return _convnext(block_setting, stochastic_depth_prob, weights, progress, **kwargs)
 
 
 
-def convnext_small(**kwargs: Any) -> ConvNeXt:
+def convnext_small(*,
+                  weights: Optional[ConvNeXt_Small_Weights] = None, 
+                  progress: bool = True,
+                  **kwargs: Any) -> ConvNeXt:
     """ConvNeXt Small model architecture from the
     `A ConvNet for the 2020s <https://arxiv.org/abs/2201.03545>`_ paper.
 
@@ -237,11 +254,14 @@ def convnext_small(**kwargs: Any) -> ConvNeXt:
         CNBlockConfig(768, None, 3),
     ]
     stochastic_depth_prob = kwargs.pop("stochastic_depth_prob", 0.4)
-    return _convnext(block_setting, stochastic_depth_prob, **kwargs)
+    return _convnext(block_setting, stochastic_depth_prob, weights, progress, **kwargs)
 
 
 
-def convnext_base(**kwargs: Any) -> ConvNeXt:
+def convnext_base(*,
+                  weights: Optional[ConvNeXt_Base_Weights] = None, 
+                  progress: bool = True,
+                  **kwargs: Any) -> ConvNeXt:
     """ConvNeXt Base model architecture from the
     `A ConvNet for the 2020s <https://arxiv.org/abs/2201.03545>`_ paper.
 
@@ -266,11 +286,14 @@ def convnext_base(**kwargs: Any) -> ConvNeXt:
         CNBlockConfig(1024, None, 3),
     ]
     stochastic_depth_prob = kwargs.pop("stochastic_depth_prob", 0.5)
-    return _convnext(block_setting, stochastic_depth_prob, **kwargs)
+    return _convnext(block_setting, stochastic_depth_prob, weights, progress, **kwargs)
 
 
 
-def convnext_large(**kwargs: Any) -> ConvNeXt:
+def convnext_large(*,
+                  weights: Optional[ConvNeXt_Large_Weights] = None, 
+                  progress: bool = True,
+                  **kwargs: Any) -> ConvNeXt:
     """ConvNeXt Large model architecture from the
     `A ConvNet for the 2020s <https://arxiv.org/abs/2201.03545>`_ paper.
 
@@ -295,7 +318,7 @@ def convnext_large(**kwargs: Any) -> ConvNeXt:
         CNBlockConfig(1536, None, 3),
     ]
     stochastic_depth_prob = kwargs.pop("stochastic_depth_prob", 0.5)
-    return _convnext(block_setting, stochastic_depth_prob, **kwargs)
+    return _convnext(block_setting, stochastic_depth_prob, weights, progress **kwargs)
 
 
 

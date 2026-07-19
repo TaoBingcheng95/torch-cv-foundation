@@ -86,40 +86,61 @@ class UNet(nn.Module):
         super().__init__()
 
         # 第一层没有池化，只有双卷积
-        self.inc = DoubleConv(in_channels, 64)
+        self.inc = DoubleConv(in_channels, features) # 输出: H×W, 通道=64
 
         # 编码器
-        self.down1 = EncoderBlock(features, features * 2) # 64, 128
-        self.down2 = EncoderBlock(features*2, features * 4) # 128, 256
-        self.down3 = EncoderBlock(features * 4, features * 8) # 256,512
-        self.down4 = EncoderBlock(features * 8, features * 16) # 512, 1024
+        # down1: 输入64 -> 输出128, skip1通道=128, 池化后尺寸 H/2
+        self.down1 = EncoderBlock(in_channels=features, 
+                                  out_channels=features * 2) # 64, 128
+        # down2: 输入128 -> 输出256, skip2通道=256, 池化后尺寸 H/4
+        self.down2 = EncoderBlock(in_channels=features * 2, 
+                                  out_channels=features * 4) # 128, 256
+        # down3: 输入256 -> 输出512, skip3通道=512, 池化后尺寸 H/8
+        self.down3 = EncoderBlock(in_channels=features * 4, 
+                                  out_channels=features * 8) # 256,512
+        # down4: 输入512 -> 输出1024, skip4通道=1024, 池化后尺寸 H/16 (Bottleneck)
+        self.down4 = EncoderBlock(in_channels=features * 8, 
+                                  out_channels=features * 16) # 512, 1024
   
-        # 解码器
-        self.up1 = DecoderBlock(features * 16, features * 8) # 1024, 512
-        self.up2 = DecoderBlock(features * 8, features * 4) # 512,256
-        self.up3 = DecoderBlock(features * 4, features * 2) # 256,128
-        self.up4 = DecoderBlock(features * 2, features) # 128,64
+        # 解码器 标准配对：严格同分辨率
+        # up1: 瓶颈(1024) 上采样到 H/8，拼接 skip4(1024通道, H/8) -> 输出 512
+        self.up1 = DecoderBlock(in_channels=features * 16, 
+                                skip_channels=features * 16, # 1024 (对应 skip4)
+                                out_channels=features * 8) 
+        # up2: 上一步(512) 上采样到 H/4，拼接 skip3(512通道, H/4) -> 输出 256
+        self.up2 = DecoderBlock(in_channels=features * 8, 
+                                skip_channels=features * 8,  # 512  (对应 skip3)
+                                out_channels=features * 4)
+        # up3: 上一步(256) 上采样到 H/2，拼接 skip2(256通道, H/2) -> 输出 128
+        self.up3 = DecoderBlock(in_channels=features * 4, 
+                                skip_channels=features * 4, # 256  (对应 skip2)
+                                out_channels=features * 2)
+        # up4: 上一步(128) 上采样到 H，拼接 skip1(128通道, H) -> 输出 64
+        self.up4 = DecoderBlock(in_channels=features * 2, 
+                                skip_channels=features * 2, # 128  (对应 skip1)
+                                out_channels=features)
 
         # 输出层
         self.out = nn.Conv2d(features, num_classes, kernel_size=1)
 
     def forward(self, x):
+
         # 基础特征提取
-        x_init = self.inc(x)
+        x_init = self.inc(x) # H×W, 通道=64
 
         # Encoder 阶段，返回 skip 特征 和 下采样结果
-        skip1, x_down1 = self.down1(x_init)
-        skip2, x_down2 = self.down2(x_down1)
-        skip3, x_down3 = self.down3(x_down2)
-        skip4, x_down4 = self.down4(x_down3) # x_down4 是 Bottleneck
-        
-        # # Decoder 阶段：将 skip 特征与深层特征融合
-        x_up4 = self.up1(x_down4, skip3)
-        x_up3 = self.up2(x_up4, skip2)
-        x_up2 = self.up3(x_up3, skip1)
-        x_up1 = self.up4(x_up2, x_init)
+        skip1, x_down1 = self.down1(x_init)       # skip: H×W, 128 | 池化: H/2
+        skip2, x_down2 = self.down2(x_down1)      # skip: H/2, 256 | 池化: H/4
+        skip3, x_down3 = self.down3(x_down2)      # skip: H/4, 512 | 池化: H/8
+        skip4, x_down4 = self.down4(x_down3)      # skip: H/8, 1024| 池化: H/16 (瓶颈)
 
-        logits = self.out(x_up1)
+        # Decoder 阶段：将 skip 特征与深层特征融合（严格同分辨率匹配）
+        x = self.up1(x_down4, skip4)  # 瓶颈 H/16 -> H/8，拼接 skip4 (H/8)
+        x = self.up2(x, skip3)        # H/8 -> H/4，拼接 skip3 (H/4)
+        x = self.up3(x, skip2)        # H/4 -> H/2，拼接 skip2 (H/2)
+        x = self.up4(x, skip1)        # H/2 -> H，拼接 skip1 (H)
+
+        logits = self.out(x)
 
         return logits
 
@@ -136,14 +157,14 @@ class UNet_ResNet18(nn.Module):
         # 以便与上一层 Decoder 输出的 32 通道完美拼接 (32+32=64)
         self.align_x0 = nn.Conv2d(64, 32, kernel_size=1)
         
-        # Decoder (通道数严格匹配 ResNet18 的输出)
-        # up4: 接收 512 -> up变256 + skip3(256) = 512 -> 输出 256
+        # Decoder (skip_channels = skip 特征图的实际通道数)
+        # up4: 接收 x4(512) -> reduce到256 + x3(256) = 512 -> 输出 256
         self.up4 = DecoderBlock(in_channels=512, skip_channels=256, out_channels=256)
-        # up3: 接收 256 -> up变128 + skip2(128) = 256 -> 输出 128
+        # up3: 接收 d4(256) -> reduce到128 + x2(128) = 256 -> 输出 128
         self.up3 = DecoderBlock(in_channels=256, skip_channels=128, out_channels=128)
-        # up2: 接收 128 -> up变64  + skip1(64)  = 128 -> 输出 64
+        # up2: 接收 d3(128) -> reduce到64  + x1(64)  = 128 -> 输出 64
         self.up2 = DecoderBlock(in_channels=128, skip_channels=64, out_channels=64)
-        # up1: 接收 64  -> up变32  + align_x0(32)= 64  -> 输出 32
+        # up1: 接收 d2(64)  -> reduce到32  + x0_align(32) = 64 -> 输出 32
         self.up1 = DecoderBlock(in_channels=64, skip_channels=32, out_channels=32)
 
         # 最终上采样层：将 1/2 尺寸恢复到 1（原图尺寸）
@@ -160,10 +181,16 @@ class UNet_ResNet18(nn.Module):
         
         #  Encoder: 5 阶段，32 倍下采样
         features = self.encoder(x)
-        x0, x1, x2, x3, x4 = features
+        # x0, x1, x2, x3, x4 = features
+        x0, x1, x2, x3, x4 = features.values()
 
-        # # 对齐最浅层特征的通道数
+        # 对齐最浅层特征的通道数
         x0_aligned = self.align_x0(x0)
+        print(f"x0 shape: {x0.shape}")
+        print(f"x1 shape: {x1.shape}")
+        print(f"x2 shape: {x2.shape}")
+        print(f"x3 shape: {x3.shape}")
+        print(f"x4 shape: {x4.shape}")
         
         # Decoder 阶段：自底向上融合
         d4 = self.up4(x4, x3)
@@ -187,17 +214,17 @@ class UNet_MobileNetV2(nn.Module):
         # 1. Encoder: 通道数序列 [16, 24, 32, 96, 320]
         self.encoder = MobileNetV2Encoder(pretrained=pretrained_encoder)
         
-        # 2. Decoder: 严格对齐通道数
-        # up4: 接收 f4(320), skip 是 f3(96). 拼接后 96*2=192. 输出 96
+        # 2. Decoder: skip_channels = skip 特征图的实际通道数
+        # up4: 接收 f4(320) -> reduce到96 + f3(96) = 192 -> 输出 96
         self.up4 = DecoderBlock(in_channels=320, skip_channels=96, out_channels=96)
         
-        # up3: 接收 96, skip 是 f2(32). 拼接后 32*2=64. 输出 32
+        # up3: 接收 d4(96) -> reduce到32 + f2(32) = 64 -> 输出 32
         self.up3 = DecoderBlock(in_channels=96, skip_channels=32, out_channels=32)
         
-        # up2: 接收 32, skip 是 f1(24). 拼接后 24*2=48. 输出 24
+        # up2: 接收 d3(32) -> reduce到24 + f1(24) = 48 -> 输出 24
         self.up2 = DecoderBlock(in_channels=32, skip_channels=24, out_channels=24)
         
-        # up1: 接收 24, skip 是 f0(16). 拼接后 16*2=32. 输出 16
+        # up1: 接收 d2(24) -> reduce到16 + f0(16) = 32 -> 输出 16
         self.up1 = DecoderBlock(in_channels=24, skip_channels=16, out_channels=16)
 
         # 3. 最终上采样：将 1/2 尺寸恢复为原图尺寸
@@ -212,7 +239,6 @@ class UNet_MobileNetV2(nn.Module):
 
     def forward(self, x):
         f0, f1, f2, f3, f4 = self.encoder(x)
-        
         d4 = self.up4(f4, f3)
         d3 = self.up3(d4, f2)
         d2 = self.up2(d3, f1)
@@ -225,8 +251,8 @@ class UNet_MobileNetV2(nn.Module):
 
 
 if __name__ == "__main__":
-    model = UNet_MobileNetV2(in_channels=3, num_classes=1)
-    x = torch.randn(1, 3, 244, 244)  # 原论文输入尺寸572x572
+    model = UNet(in_channels=3, num_classes=1)
+    x = torch.randn(1, 3, 572, 572)  # 原论文输入尺寸572x572
     output = model(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {output.shape}")

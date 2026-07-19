@@ -1,7 +1,4 @@
 
-import os
-import numpy as np
-
 import torch
 from torch import Tensor
 
@@ -9,6 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torchvision.models import vgg16, VGG16_Weights
+
+__all__ = [
+    'FCN32s',
+    'FCN16s',
+    'FCN8s',
+]
 
 
 
@@ -33,7 +36,29 @@ def get_upsampling_weight(in_channels, out_channels, kernel_size):
 
 
 class FCN32s(nn.Module):
-    
+    """
+    FCN-32s: 最基础的全卷积网络 (Fully Convolutional Network)。
+
+    架构概述:
+        基于 VGG16 的卷积层作为 backbone 提取特征，将原始 VGG 的全连接层
+        (fc6, fc7) 转换为等价的卷积层 (1×1 conv)，从而接受任意尺寸的输入。
+        最终通过 score_fr (1×1 conv) 将通道数映射到类别数，再经 32× 转置卷积
+        上采样回原图分辨率，得到逐像素的分割预测。
+
+    数据流:
+        输入 (3, H, W)
+          → VGG16 backbone (conv1~conv5 + pool1~pool5)
+          → pool5: (512, H/32, W/32)
+          → fc6 (7×7 conv, 4096ch) → fc7 (1×1 conv, 4096ch) → score_fr (1×1 conv, num_classes)
+          → ConvTranspose2d 32× 上采样
+          → 输出 (num_classes, H, W)
+
+    特点:
+        - 最粗糙的上采样方式，每个 32×32 区域内的像素共享同一个预测值
+        - 丢失了大量空间细节，分割结果较为粗糙
+        - 是 FCN16s 和 FCN8s 的基础，后两者通过融合浅层特征逐步提升精度
+    """
+
     def __init__(self, num_classes: int = 10):
         super().__init__()
         # # conv1
@@ -85,7 +110,6 @@ class FCN32s(nn.Module):
         self.drop7 = nn.Dropout2d()
         # score 层
         self.score_fr = nn.Conv2d(4096, num_classes, kernel_size=1)
-
         # self.fcn_head = nn.Sequential(
         #     self.fc6,
         #     self.relu6,
@@ -106,12 +130,11 @@ class FCN32s(nn.Module):
         input_size = x.size()[2:]
         pool5 = self.backbone(x)
 
-        # h = self.relu6(self.fc6(pool5))
-        # h = self.drop6(h)
-        # h = self.relu7(self.fc7(h))
-        # h = self.drop7(h)
-        # h = self.score_fr(h)
-        x = self.fcn_head(pool5)
+        h = self.relu6(self.fc6(pool5))
+        h = self.drop6(h)
+        h = self.relu7(self.fc7(h))
+        h = self.drop7(h)
+        h = self.score_fr(h)
 
         out = self.upsample32(x)
         # or 直接使用 F.interpolate 上采样 32 倍
@@ -154,7 +177,28 @@ class FCN32s(nn.Module):
 
 
 class FCN16s(nn.Module):
-    
+    """
+    FCN-16s: 在 FCN-32s 基础上融合 pool4 层特征的改进版本。
+
+    架构概述:
+        在 FCN-32s 的基础上，将 VGG16 backbone 在 pool4 (1/16 分辨率) 处的特征
+        通过 1×1 卷积 (score_pool4) 映射到类别空间，再与 pool5 经 fc6→fc7→score_fr
+        后 2× 上采样的结果逐元素相加。融合后的特征再经 16× 转置卷积上采样回原图分辨率。
+
+    数据流:
+        输入 (3, H, W)
+          → feature_1 (VGG16 前 24 层, 到 pool4): (512, H/16, W/16)  ──→ score_pool4 (1×1) → pool4_score
+          → feature_2 (VGG16 后 7 层, pool5):     (512, H/32, W/32)
+              → fc6 → fc7 → score_fr → upsample2 (2× 上采样至 H/16)
+              → 与 pool4_score 逐元素相加 (融合深层语义与浅层空间细节)
+              → upsample16 (16× 上采样)
+          → 输出 (num_classes, H, W)
+
+    特点:
+        - 融合了 pool4 的浅层空间信息，分割精度优于 FCN-32s
+        - 是 FCN-32s 到 FCN-8s 的过渡版本
+    """
+
     def __init__(self, num_classes: int = 10):
         super().__init__()
         pretrained_model = vgg16(weights=VGG16_Weights.DEFAULT)
@@ -251,6 +295,33 @@ class FCN16s(nn.Module):
 
 
 class FCN8s(nn.Module):
+    """
+    FCN-8s: 融合 pool3、pool4、pool5 三层特征的高精度全卷积网络。
+
+    架构概述:
+        在 FCN-16s 的基础上进一步融合 pool3 (1/8 分辨率) 的特征。
+        将 VGG16 backbone 拆分为三段:
+          - backbone_1: conv1 ~ pool3  (提取 1/8 分辨率特征)
+          - backbone_2: conv4 ~ pool4  (提取 1/16 分辨率特征)
+          - backbone_3: conv5 ~ pool5  (提取 1/32 分辨率特征)
+        深层特征经 fc6→fc7→score_fr 后逐步上采样并与浅层特征融合:
+          pool5 得分 → 2× 上采样 → + pool4 得分 → 2× 上采样 → + pool3 得分 → 8× 上采样
+
+    数据流:
+        输入 (3, H, W)
+          → backbone_1 → pool3: (256, H/8, W/8)    ──→ score_pool3 (1×1) → pool3_score
+          → backbone_2 → pool4: (512, H/16, W/16)   ──→ score_pool4 (1×1) → pool4_score
+          → backbone_3 → pool5: (512, H/32, W/32)
+              → fc6 → fc7 → score_fr
+              → upsample2_1 (2×) + pool4_score → upsample2_2 (2×) + pool3_score → upsample8 (8×)
+          → 输出 (num_classes, H, W)
+
+    特点:
+        - 三级特征融合，充分利用了浅层空间细节和深层语义信息
+        - 是 FCN 系列中分割精度最高的变体
+        - 相比 FCN-16s 和 FCN-32s，边界细节恢复更精细
+    """
+
     def __init__(self, num_classes: int =10):
         super().__init__()
         pretrained_model = vgg16(weights=VGG16_Weights.DEFAULT)
@@ -362,7 +433,6 @@ class SimpleFCN(nn.Module):
     """
     A simple 5 layer FCN with leaky relus and 'same' padding, no Pooling layer.
     """
-
     def __init__(self, 
                  in_channels: int=3,
                  num_classes: int=10,
@@ -376,7 +446,7 @@ class SimpleFCN(nn.Module):
             in_channels: Number of input channels that the model will expect
             num_classes: Number of output classes (channels in the final layer)
             num_filters: Number of filters in each convolutional layer/隐藏层卷积的通道数
-            dropout_prob: Dropout probability (default: 0.5)
+            dropout_prob: Dropout probability (default: 0.1)
         
         FCN 的输出是“图”，而不是分类网络输出的“向量”。训练时对应的损失函数应该是 nn.CrossEntropyLoss（输入为 [B, C, H, W] 的 logits）
         """
@@ -439,16 +509,12 @@ class SimpleFCN(nn.Module):
 
 
 
-
 if __name__ == '__main__':
     from torchinfo import summary
 
     input_size = [1, 3, 224, 224]
-    input_data = torch.randn(1, 3, 224, 224)  # batch_size, channel，h, w
+    dummy_input = torch.randn(1, 3, 224, 224)  # batch_size, channel，h, w
     
     model = SimpleFCN()
-
-    # out = model(input_data)
-    # print(out.shape)
     summary(model, input_size=input_size)
 

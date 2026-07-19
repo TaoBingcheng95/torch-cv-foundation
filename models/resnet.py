@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from torchvision.models import WeightsEnum #, ResNet
+from torchvision.models import WeightsEnum, ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights
 
 try:
     from .utils.pytorch_api import _ovewrite_named_param
@@ -14,19 +14,17 @@ except ImportError as e:
     _ovewrite_named_param = None
 
 
-# __all__ = [
-#     "ResNet",
-#     "resnet18",
-#     "resnet34",
-#     "resnet50",
-#     "resnet101",
-#     "resnet152",
-#     "resnext50_32x4d",
-#     "resnext101_32x8d",
-#     "resnext101_64x4d",
-#     "wide_resnet50_2",
-#     "wide_resnet101_2",
-# ]
+__all__ = [
+    "ResNet18",
+    "ResNet50",
+    "ResNet",
+    "build_resnet",
+    "resnet18",
+    "resnet34",
+    "resnet50",
+    "resnet101",
+    "resnet152",
+]
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
@@ -46,7 +44,11 @@ def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, d
 
 def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     """1x1 convolution"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return nn.Conv2d(in_planes, 
+                     out_planes, 
+                     kernel_size=1, 
+                     stride=stride, 
+                     bias=False)
 
 
 
@@ -291,31 +293,255 @@ class ResNet(nn.Module):
 
 
 
+class ResNet18(nn.Module):
+    """
+    ResNet-18 硬编码实现（BasicBlock, [2, 2, 2, 2]）。
+
+    结构展开便于初学者逐层阅读，与 ResNet(BasicBlock, [2,2,2,2]) 等价。
+    输入: 3×224×224 → 输出: num_classes
+    """
+    def __init__(self, num_classes: int = 1000) -> None:
+        super().__init__()
+
+        # Stem: 7×7 卷积 + BN + ReLU + 3×3 最大池化
+        # 3×224×224 → 64×112×112 → Pool → 64×56×56
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        # Layer 1: 2×BasicBlock(64→64), 无降采样
+        # 64×56×56 → 64×56×56
+        self.layer1 = nn.Sequential(
+            BasicBlock(64, 64), # 恒等映射，无 downsample
+            BasicBlock(64, 64)  # 恒等映射，无 downsample
+        )
+
+        # Layer 2: 2×BasicBlock(64→128, stride=2), 首个 block 降采样
+        # 64×56×56 → 128×28×28
+        self.layer2 = nn.Sequential(
+            BasicBlock(64, 128, stride=2,
+                       downsample=nn.Sequential(
+                           conv1x1(64, 128, stride=2),
+                           nn.BatchNorm2d(128))),
+            BasicBlock(128, 128) # 恒等映射
+        )
+
+        # Layer 3: 2×BasicBlock(128→256, stride=2), 首个 block 降采样
+        # 128×28×28 → 256×14×14
+        self.layer3 = nn.Sequential(
+            BasicBlock(128, 256, stride=2,
+                       downsample=nn.Sequential(
+                           conv1x1(128, 256, stride=2),
+                           nn.BatchNorm2d(256))),
+            BasicBlock(256, 256) # 恒等映射
+        )
+
+        # Layer 4: 2×BasicBlock(256→512, stride=2), 首个 block 降采样
+        # 256×14×14 → 512×7×7
+        self.layer4 = nn.Sequential(
+            BasicBlock(256, 512, stride=2,
+                       downsample=nn.Sequential(
+                           conv1x1(256, 512, stride=2),
+                           nn.BatchNorm2d(512))),
+            BasicBlock(512, 512) # 恒等映射
+        )
+
+        # 分类头: 全局平均池化 + 全连接
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512, num_classes)
+
+        # 权重初始化
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # Stem
+        x = self.conv1(x)    # (B, 3, 224, 224) → (B, 64, 112, 112)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)  # (B, 64, 112, 112) → (B, 64, 56, 56)
+
+        # Layer 1: 64×56×56 → 64×56×56
+        x = self.layer1(x)
+        # Layer 2: 64×56×56 → 128×28×28
+        x = self.layer2(x)
+        # Layer 3: 128×28×28 → 256×14×14
+        x = self.layer3(x)
+        # Layer 4: 256×14×14 → 512×7×7
+        x = self.layer4(x)
+        # 分类头
+        x = self.avgpool(x)          # (B, 512, 7, 7) → (B, 512, 1, 1)
+        x = torch.flatten(x, 1)      # (B, 512)
+        x = self.fc(x)               # (B, num_classes)
+        return x
+
+
+
+class ResNet50(nn.Module):
+    """
+    ResNet-50 硬编码实现（Bottleneck, [3, 4, 6, 3]）。
+
+    结构展开便于初学者逐层阅读，与 ResNet(Bottleneck, [3,4,6,3]) 等价。
+    注意：Bottleneck 的 expansion=4，输出通道数为 planes×4。
+    输入: 3×224×224 → 输出: num_classes
+    """
+    def __init__(self, num_classes: int = 1000) -> None:
+        super().__init__()
+
+        # Stem: 7×7 卷积 + BN + ReLU + 3×3 最大池化
+        # 3×224×224 → 64×112×112 → Pool → 64×56×56
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        # Layer 1: 3×Bottleneck(64→64, expand=256), 首个 block 降采样通道
+        # 64×56×56 → 256×56×56
+        # self.layer1_block0 = Bottleneck(64, 64,
+        #                                 downsample=nn.Sequential(
+        #                                     conv1x1(64, 256),
+        #                                     nn.BatchNorm2d(256)))
+        # self.layer1_block1 = Bottleneck(256, 64)  # 恒等映射
+        # self.layer1_block2 = Bottleneck(256, 64)  # 恒等映射
+        self.layer1 = nn.Sequential(
+            Bottleneck(64, 64, 
+                       downsample=nn.Sequential(
+                           conv1x1(64, 256), 
+                           nn.BatchNorm2d(256))),
+            Bottleneck(256, 64), # 恒等映射
+            Bottleneck(256, 64)  # 恒等映射
+        )
+
+
+        # Layer 2: 4×Bottleneck(256→128, expand=512, stride=2)
+        # 256×56×56 → 512×28×28
+        # self.layer2_block0 = Bottleneck(256, 128, stride=2,
+        #                                 downsample=nn.Sequential(
+        #                                     conv1x1(256, 512, stride=2),
+        #                                     nn.BatchNorm2d(512)))
+        # self.layer2_block1 = Bottleneck(512, 128)  # 恒等映射
+        # self.layer2_block2 = Bottleneck(512, 128)  # 恒等映射
+        # self.layer2_block3 = Bottleneck(512, 128)  # 恒等映射
+        self.layer2 = nn.Sequential(
+            Bottleneck(256, 128, stride=2, 
+                    downsample=nn.Sequential(
+                        conv1x1(256, 512, stride=2), 
+                        nn.BatchNorm2d(512))),
+            Bottleneck(512, 128),# 恒等映射
+            Bottleneck(512, 128),# 恒等映射
+            Bottleneck(512, 128)# 恒等映射
+        )
+
+        # Layer 3: 6×Bottleneck(512→256, expand=1024, stride=2)
+        # 512×28×28 → 1024×14×14
+        # self.layer3_block0 = Bottleneck(512, 256, stride=2,
+        #                                 downsample=nn.Sequential(
+        #                                     conv1x1(512, 1024, stride=2),
+        #                                     nn.BatchNorm2d(1024)))
+        # self.layer3_block1 = Bottleneck(1024, 256)  # 恒等映射
+        # self.layer3_block2 = Bottleneck(1024, 256)  # 恒等映射
+        # self.layer3_block3 = Bottleneck(1024, 256)  # 恒等映射
+        # self.layer3_block4 = Bottleneck(1024, 256)  # 恒等映射
+        # self.layer3_block5 = Bottleneck(1024, 256)  # 恒等映射
+        self.layer3 = nn.Sequential(
+            Bottleneck(512, 256, stride=2,
+                       downsample=nn.Sequential(
+                           conv1x1(512, 1024, stride=2), 
+                           nn.BatchNorm2d(1024))),
+            Bottleneck(1024, 256),# 恒等映射
+            Bottleneck(1024, 256),# 恒等映射
+            Bottleneck(1024, 256),# 恒等映射
+            Bottleneck(1024, 256),# 恒等映射
+            Bottleneck(1024, 256)
+        )
+
+        # Layer 4: 3×Bottleneck(1024→512, expand=2048, stride=2)
+        # 1024×14×14 → 2048×7×7
+        # self.layer4_block0 = Bottleneck(1024, 512, stride=2,
+        #                                 downsample=nn.Sequential(
+        #                                     conv1x1(1024, 2048, stride=2),
+        #                                     nn.BatchNorm2d(2048)))
+        # self.layer4_block1 = Bottleneck(2048, 512)  # 恒等映射
+        # self.layer4_block2 = Bottleneck(2048, 512)  # 恒等映射
+        self.layer4 = nn.Sequential(
+            Bottleneck(1024, 512, stride=2,
+                       downsample=nn.Sequential(
+                           conv1x1(1024, 2048, stride=2), 
+                           nn.BatchNorm2d(2048))),
+            Bottleneck(2048, 512),# 恒等映射
+            Bottleneck(2048, 512)# 恒等映射
+        )
+
+        # 分类头: 全局平均池化 + 全连接
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(2048, num_classes)
+
+        # 权重初始化
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # Stem
+        x = self.conv1(x)    # (B, 3, 224, 224) → (B, 64, 112, 112)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)  # (B, 64, 112, 112) → (B, 64, 56, 56)
+
+        # Layer 1: 64×56×56 → 256×56×56
+        x = self.layer1(x)
+
+        # Layer 2: 256×56×56 → 512×28×28
+        x = self.layer2(x)
+
+        # Layer 3: 512×28×28 → 1024×14×14
+        x = self.layer3(x)
+
+        # Layer 4: 1024×14×14 → 2048×7×7
+        x = self.layer4(x)
+
+        # 分类头
+        x = self.avgpool(x)          # (B, 2048, 7, 7) → (B, 2048, 1, 1)
+        x = torch.flatten(x, 1)      # (B, 2048)
+        x = self.fc(x)               # (B, num_classes)
+        return x
+
+
+
 def _resnet(
     block: type[Union[BasicBlock, Bottleneck]],
     layers: list[int],
-    weights: Optional[WeightsEnum],
-    progress: bool,
+    weights: Optional[WeightsEnum]=None,
+    progress: bool=False,
     **kwargs: Any,
-) -> ResNet:
+    ) -> ResNet:
     if weights is not None and _ovewrite_named_param:
         _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
 
     model = ResNet(block, layers, **kwargs)
-
     if weights is not None:
         model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True))
-
     return model
 
 
-def build_resnet(arch='resnet50', cfg='resnet50', weights: Optional[WeightsEnum] = None, progress=True, **kwargs):
+
+def build_resnet(arch:str ='resnet50', cfg:str ='resnet50', 
+                 weights: Optional[WeightsEnum] = None, 
+                 progress: bool=True, **kwargs):
     block, layers = cfgs.get(cfg, 'resnet50')
     return _resnet(block, layers, weights=weights, progress=progress, **kwargs)
 
 
 
-def resnet18(**kwargs: Any) -> ResNet:
+def resnet18(*, weights: Optional[ResNet18_Weights] = None, progress: bool = True, **kwargs: Any) -> ResNet:
     """ResNet-18 from `Deep Residual Learning for Image Recognition <https://arxiv.org/abs/1512.03385>`__.
 
     Args:
@@ -334,12 +560,12 @@ def resnet18(**kwargs: Any) -> ResNet:
     .. autoclass:: torchvision.models.ResNet18_Weights
         :members:
     """
+    weights = ResNet18_Weights.verify(weights)
+    return _resnet(BasicBlock, [2, 2, 2, 2], weights, progress, **kwargs)
 
-    return _resnet(BasicBlock, [2, 2, 2, 2], None, False, **kwargs)
 
 
-
-def resnet34(**kwargs: Any) -> ResNet:
+def resnet34(*, weights: Optional[ResNet34_Weights] = None, progress: bool = True, **kwargs: Any) -> ResNet:
     """ResNet-34 from `Deep Residual Learning for Image Recognition <https://arxiv.org/abs/1512.03385>`__.
 
     Args:
@@ -358,12 +584,13 @@ def resnet34(**kwargs: Any) -> ResNet:
     .. autoclass:: torchvision.models.ResNet34_Weights
         :members:
     """
+    weights = ResNet34_Weights.verify(weights)
 
-    return _resnet(BasicBlock, [3, 4, 6, 3], None, False, **kwargs)
+    return _resnet(BasicBlock, [3, 4, 6, 3], weights, progress, **kwargs)
 
 
 
-def resnet50(**kwargs: Any) -> ResNet:
+def resnet50(*, weights: Optional[ResNet50_Weights] = None, progress: bool = True, **kwargs: Any) -> ResNet:
     """ResNet-50 from `Deep Residual Learning for Image Recognition <https://arxiv.org/abs/1512.03385>`__.
 
     .. note::
@@ -388,10 +615,11 @@ def resnet50(**kwargs: Any) -> ResNet:
     .. autoclass:: torchvision.models.ResNet50_Weights
         :members:
     """
-    return _resnet(Bottleneck, [3, 4, 6, 3], None, False, **kwargs)
+    weights = ResNet50_Weights.verify(weights)
+    return _resnet(Bottleneck, [3, 4, 6, 3], weights, progress, **kwargs)
 
 
-def resnet101(**kwargs: Any) -> ResNet:
+def resnet101(*, weights: Optional[ResNet101_Weights] = None, progress: bool = True, **kwargs: Any) -> ResNet:
     """ResNet-101 from `Deep Residual Learning for Image Recognition <https://arxiv.org/abs/1512.03385>`__.
 
     .. note::
@@ -417,10 +645,11 @@ def resnet101(**kwargs: Any) -> ResNet:
         :members:
     """
 
-    return _resnet(Bottleneck, [3, 4, 23, 3], None, False, **kwargs)
+    weights = ResNet101_Weights.verify(weights)
+    return _resnet(Bottleneck, [3, 4, 23, 3], weights, progress, **kwargs)
 
 
-def resnet152(**kwargs: Any) -> ResNet:
+def resnet152(*, weights: Optional[ResNet152_Weights] = None, progress: bool = True, **kwargs: Any) -> ResNet:
     """ResNet-152 from `Deep Residual Learning for Image Recognition <https://arxiv.org/abs/1512.03385>`__.
 
     .. note::
@@ -446,8 +675,8 @@ def resnet152(**kwargs: Any) -> ResNet:
         :members:
     """
 
-    return _resnet(Bottleneck, [3, 8, 36, 3], None, False, **kwargs)
-
+    weights = ResNet152_Weights.verify(weights)
+    return _resnet(Bottleneck, [3, 8, 36, 3], weights, progress, **kwargs)
 
 
 
@@ -456,10 +685,29 @@ if __name__ == "__main__":
 
     from torchinfo import summary
 
-    model = resnet18()
+    model = ResNet18()
+    input_size = (1, 3, 224, 224)
+    # dummy_data = torch.randn(input_size)
+    summary(model, input_size=input_size)
+    
+    
 
-    data = torch.randn(1, 3, 224, 224)
-    # print(model)
-    # res = model(data)
-    # print(res.shape)
-    summary(model, input_data=data)
+    # # ResNet18
+    # m1 = ResNet18(num_classes=10)
+    # m2 = resnet18(num_classes=10)
+    # m1.load_state_dict(m2.state_dict())
+    # m1.eval(); 
+    # m2.eval()
+    # with torch.no_grad():
+    #     diff18 = (m1(x) - m2(x)).abs().max().item()
+    # print(f"ResNet18 差异: {diff18:.2e}")  # 应为 0.00e+00
+
+    # # ResNet50
+    # m1 = ResNet50(num_classes=10)
+    # m2 = resnet50(num_classes=10)
+    # m1.load_state_dict(m2.state_dict())
+    # m1.eval(); 
+    # m2.eval()
+    # with torch.no_grad():
+    #     diff50 = (m1(x) - m2(x)).abs().max().item()
+    # print(f"ResNet50 差异: {diff50:.2e}")  # 应为 0.00e+00

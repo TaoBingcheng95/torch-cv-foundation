@@ -1,14 +1,22 @@
 # 迁移和复现一部分 Pytorch 和 torchvision 内部的API，方便进行网络函数的复现和实验
 
+import re
 import warnings
 # import collections
 from collections import OrderedDict, abc
 from typing import Callable, List, Optional, Sequence, Tuple, Union, Any, TypeVar
 from itertools import repeat
+from functools import partial
+
 
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
+from torchvision.models import WeightsEnum
+
+
+
+
 
 # from ...utils import _log_api_usage_onces
 
@@ -64,6 +72,7 @@ def _ovewrite_named_param(kwargs: dict[str, Any], param: str, new_value) -> None
         kwargs[param] = new_value
 
 
+
 def _make_ntuple(x: Any, n: int) -> Tuple[Any, ...]:
     """
     Make n-tuple from input x. If x is an iterable, then we just convert it to tuple.
@@ -77,6 +86,7 @@ def _make_ntuple(x: Any, n: int) -> Tuple[Any, ...]:
     if isinstance(x, abc.Iterable):
         return tuple(x)
     return tuple(repeat(x, n))
+
 
 
 def _make_divisible(v: float, divisor: int, min_value: Optional[int] = None) -> int:
@@ -93,6 +103,27 @@ def _make_divisible(v: float, divisor: int, min_value: Optional[int] = None) -> 
     if new_v < 0.9 * v:
         new_v += divisor
     return new_v
+
+
+
+def _load_state_dict(model: nn.Module, weights: WeightsEnum, progress: bool) -> None:
+    # '.'s are no longer allowed in module names, but previous _DenseLayer
+    # has keys 'norm.1', 'relu.1', 'conv.1', 'norm.2', 'relu.2', 'conv.2'.
+    # They are also in the checkpoints in model_urls. This pattern is used
+    # to find such keys.
+    pattern = re.compile(
+        r"^(.*denselayer\d+\.(?:norm|relu|conv))\.((?:[12])\.(?:weight|bias|running_mean|running_var))$"
+    )
+
+    state_dict = weights.get_state_dict(progress=progress, check_hash=True)
+    for key in list(state_dict.keys()):
+        res = pattern.match(key)
+        if res:
+            new_key = res.group(1) + res.group(2)
+            state_dict[new_key] = state_dict[key]
+            del state_dict[key]
+    model.load_state_dict(state_dict)
+
 
 
 
@@ -123,6 +154,7 @@ class _SimpleSegmentationModel(nn.Module):
             result["aux"] = x
 
         return result
+
 
 
 class ConvNormActivation(torch.nn.Sequential):

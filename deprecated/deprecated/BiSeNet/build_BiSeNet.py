@@ -3,7 +3,7 @@ import torch
 from torch import nn
 # from torch.nn import BatchNorm2d
 
-from build_contextpath import build_contextpath
+from models.deprecated.BiSeNet.build_contextpath import build_contextpath
 # from models.components.BiSeNet.build_contextpath import build_contextpath
 
 warnings.filterwarnings(action='ignore')
