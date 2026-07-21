@@ -6,7 +6,8 @@ import torch.nn as nn
 from models.deeplab3plus import DeepLabV3Plus
 from models.backbone import ResNet18Encoder, VGG16Encoder, MobileNetV2Encoder
 # from models.unet import UNet_ResNet18, UNet_MobileNetV2, UNet
-from models.convext import convnext_base
+from models.convext import convnext_base, CNBlock
+
 
 
 
@@ -26,3 +27,6 @@ if __name__ == '__main__':
     # print(o.shape)
 
     summary(model, input_size=input_size)
+
+    # block = CNBlock(dim=96, layer_scale = 1e-6, stochastic_depth_prob=0.0) # , out_dim=192, kernel_size=3
+    # print(block)

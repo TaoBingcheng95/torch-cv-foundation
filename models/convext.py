@@ -1,8 +1,8 @@
 from functools import partial
 from typing import Callable, List, Optional, Sequence, Tuple, Union, Any
-import collections
-from itertools import repeat
-import warnings
+# import collections
+# from itertools import repeat
+# import warnings
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
@@ -138,6 +138,7 @@ class ConvNeXt(nn.Module):
             for _ in range(cnf.num_layers):
                 # adjust stochastic depth probability based on the depth of the stage block
                 sd_prob = stochastic_depth_prob * stage_block_id / (total_stage_blocks - 1.0)
+                # print(f"sd_prob={sd_prob}")
                 stage.append(block(cnf.input_channels, layer_scale, sd_prob))
                 stage_block_id += 1
             layers.append(nn.Sequential(*stage))
