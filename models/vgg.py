@@ -30,10 +30,8 @@ import torch.nn as nn
 # import torch.functional as F
 from torchvision.models import WeightsEnum
 
-try:
-    from .utils.pytorch_api import _ovewrite_named_param
-except ImportError as e:
-    _ovewrite_named_param = None
+from .utils.pytorch_api import _ovewrite_named_param
+
 
 
 __all__ = [

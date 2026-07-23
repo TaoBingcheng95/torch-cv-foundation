@@ -6,15 +6,13 @@ import warnings
 from collections import OrderedDict, abc
 from typing import Callable, List, Optional, Sequence, Tuple, Union, Any, TypeVar
 from itertools import repeat
-from functools import partial
+# from functools import partial
 
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from torchvision.models import WeightsEnum
 
-
-# from ...utils import _log_api_usage_onces
 
 V = TypeVar("V")
 
@@ -119,7 +117,6 @@ def _load_state_dict(model: nn.Module, weights: WeightsEnum, progress: bool) -> 
             state_dict[new_key] = state_dict[key]
             del state_dict[key]
     model.load_state_dict(state_dict)
-
 
 
 
@@ -293,4 +290,3 @@ class StochasticDepth(nn.Module):
     def __repr__(self) -> str:
         s = f"{self.__class__.__name__}(p={self.p}, mode={self.mode})"
         return s
-

@@ -1,19 +1,15 @@
+
 from functools import partial
-from typing import Callable, List, Optional, Sequence, Tuple, Union, Any
-# import collections
-# from itertools import repeat
-# import warnings
+from typing import Callable, List, Optional, Sequence, Any
+
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 
 from torchvision.models import WeightsEnum, ConvNeXt_Tiny_Weights, ConvNeXt_Small_Weights,ConvNeXt_Base_Weights, ConvNeXt_Large_Weights
 
-from .utils.pytorch_api import Conv2dNormActivation, Permute, StochasticDepth
-try:
-    from .utils.pytorch_api import _ovewrite_named_param
-except ImportError as e:
-    _ovewrite_named_param = None
+from .utils.pytorch_api import Conv2dNormActivation, Permute, StochasticDepth, _ovewrite_named_param
+
 
 
 __all__ = [
@@ -32,6 +28,28 @@ class LayerNorm2d(nn.LayerNorm):
         x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         x = x.permute(0, 3, 1, 2)
         return x
+
+
+
+class CNBlockConfig:
+    # Stores information listed at Section 3 of the ConvNeXt paper
+    def __init__(
+        self,
+        input_channels: int,
+        out_channels: Optional[int],
+        num_layers: int,
+    ) -> None:
+        self.input_channels = input_channels
+        self.out_channels = out_channels
+        self.num_layers = num_layers
+
+    def __repr__(self) -> str:
+        s = self.__class__.__name__ + "("
+        s += "input_channels={input_channels}"
+        s += ", out_channels={out_channels}"
+        s += ", num_layers={num_layers}"
+        s += ")"
+        return s.format(**self.__dict__)
 
 
 
@@ -64,28 +82,6 @@ class CNBlock(nn.Module):
         result = self.stochastic_depth(result)
         result += input
         return result
-
-
-
-class CNBlockConfig:
-    # Stores information listed at Section 3 of the ConvNeXt paper
-    def __init__(
-        self,
-        input_channels: int,
-        out_channels: Optional[int],
-        num_layers: int,
-    ) -> None:
-        self.input_channels = input_channels
-        self.out_channels = out_channels
-        self.num_layers = num_layers
-
-    def __repr__(self) -> str:
-        s = self.__class__.__name__ + "("
-        s += "input_channels={input_channels}"
-        s += ", out_channels={out_channels}"
-        s += ", num_layers={num_layers}"
-        s += ")"
-        return s.format(**self.__dict__)
 
 
 
@@ -184,8 +180,7 @@ def _convnext(
     stochastic_depth_prob: float,
     weights: Optional[WeightsEnum]=None,
     progress: bool= False,
-    **kwargs: Any,
-) -> ConvNeXt:
+    **kwargs: Any) -> ConvNeXt:
     if weights is not None:
         _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
     model = ConvNeXt(block_setting, stochastic_depth_prob=stochastic_depth_prob, **kwargs)
@@ -319,14 +314,4 @@ def convnext_large(*,
         CNBlockConfig(1536, None, 3),
     ]
     stochastic_depth_prob = kwargs.pop("stochastic_depth_prob", 0.5)
-    return _convnext(block_setting, stochastic_depth_prob, weights, progress **kwargs)
-
-
-
-
-if __name__ == "__main__":
-    model = convnext_tiny()
-    x = torch.randn(1, 3, 244, 244)  # 原论文输入尺寸572x572
-    output = model(x)
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {output.shape}")
+    return _convnext(block_setting, stochastic_depth_prob, weights, progress, **kwargs)

@@ -7,11 +7,8 @@ from torch import Tensor
 
 from torchvision.models import WeightsEnum, ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights
 
-try:
-    from .utils.pytorch_api import _ovewrite_named_param
-except ImportError as e:
-    print(e)
-    _ovewrite_named_param = None
+from .utils.pytorch_api import _ovewrite_named_param
+
 
 
 __all__ = [

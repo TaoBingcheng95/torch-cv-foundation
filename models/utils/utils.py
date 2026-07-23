@@ -12,7 +12,35 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.modules import Conv2d, Module
-from torchvision.models._api import WeightsEnum
+# from torchvision.models._api import WeightsEnum
+
+
+class DropPath(nn.Module):
+    """
+    Drop paths (Stochastic Depth) per sample.
+    训练时以 drop_prob 概率随机丢弃整个残差分支，推理时恒等映射。
+
+    与 timm.models.layers.DropPath / torchvision.ops.StochasticDepth 等价。
+    使用 floor(rand + keep_prob) 代替 bernoulli，避免显式除法采样。
+
+    Args:
+        drop_prob: 丢弃概率 (0.0 = 不丢弃, 1.0 = 全部丢弃)
+    """
+    def __init__(self, drop_prob: float = 0.0):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.drop_prob == 0.0 or not self.training:
+            return x
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        random_tensor.floor_()
+        return x.div(keep_prob) * random_tensor
+
+    def extra_repr(self) -> str:
+        return f"drop_prob={self.drop_prob:.4f}"
 
 
 
@@ -133,8 +161,7 @@ def reinit_initial_conv_layer(
         new_in_channels: int,
         keep_rgb_weights: bool,
         new_stride: int | tuple[int, int] | None = None,
-        new_padding: str | int | tuple[int, int] | None = None,
-) -> Conv2d:
+        new_padding: str | int | tuple[int, int] | None = None,) -> Conv2d:
     """
     Clones a Conv-2d layer while optionally retaining some of the original weights.
 

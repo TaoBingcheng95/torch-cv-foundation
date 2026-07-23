@@ -8,11 +8,7 @@ import torch.utils.checkpoint as cp
 from torch import Tensor
 from torchvision.models import WeightsEnum
 
-from .utils.pytorch_api import _load_state_dict
-try:
-    from .utils.pytorch_api import _ovewrite_named_param
-except ImportError as e:
-    _ovewrite_named_param = None
+from .utils.pytorch_api import _load_state_dict, _ovewrite_named_param
 
 
 __all__ = [

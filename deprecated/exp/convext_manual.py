@@ -10,7 +10,6 @@ LayerNorm 的默认格式 (NHWC)：PyTorch 原生的 nn.LayerNorm 是为 NLP 任
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from timm.models.layers import trunc_normal_, DropPath
 
 
 class LayerNorm(nn.Module):
@@ -44,30 +43,6 @@ class LayerNorm(nn.Module):
             # 广播乘法：将 [C] 变成 [1, C, 1, 1] 以匹配 NCHW
             x = self.weight[:, None, None] * x + self.bias[:, None, None]
             return x
-
-
-
-# class GRN(nn.Module):
-#     #  GRN 模块 (适配 channels_first)
-#     def __init__(self, dim, data_format="channels_first"):
-#         super().__init__()
-#         # 根据数据格式调整 gamma 和 beta 的形状
-#         if data_format == "channels_first":
-#             self.gamma = nn.Parameter(torch.zeros(1, dim, 1, 1))
-#             self.beta = nn.Parameter(torch.zeros(1, dim, 1, 1))
-#         else:
-#             self.gamma = nn.Parameter(torch.zeros(1, 1, 1, dim))
-#             self.beta = nn.Parameter(torch.zeros(1, 1, 1, dim))
-    
-#     def forward(self, x):
-#         # 计算空间维度的 L2 范数
-#         if x.dim() == 4: # NCHW
-#             Gx = torch.norm(x, p=2, dim=(2, 3), keepdim=True)
-#         else: # NHWC
-#             Gx = torch.norm(x, p=2, dim=(1, 2), keepdim=True)
-            
-#         Nx = Gx / (Gx.mean(dim=1 if x.dim()==4 else -1, keepdim=True) + 1e-6)
-#         return self.gamma * (x * Nx) + self.beta
 
 
 
@@ -205,13 +180,13 @@ class PatchMerging(nn.Module):
     #  Patch Merging (下采样层)
     def __init__(self, in_channels, out_channels):
         super().__init__()
+        self.norm = LayerNorm(in_channels, eps=1e-6, data_format="channels_first")
+        # LayerNorm after downsample
         self.downsample = nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2)
-        # 下采样后接 LayerNorm
-        self.norm = LayerNorm(out_channels, data_format="channels_first")
     
     def forward(self, x):
-        x = self.downsample(x)
         x = self.norm(x)
+        x = self.downsample(x)
         return x
 
 
@@ -228,7 +203,7 @@ class ConvNeXt(nn.Module):
         self.downsample_layers = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(in_chans, dims[0], kernel_size=4, stride=4),
-                LayerNorm(dims[0], data_format="channels_first") # 修复点在这里！
+                LayerNorm(dims[0], data_format="channels_first")
             )
         ])
 

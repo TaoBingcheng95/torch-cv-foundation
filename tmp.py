@@ -3,11 +3,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from models.deeplab3plus import DeepLabV3Plus
-from models.backbone import ResNet18Encoder, VGG16Encoder, MobileNetV2Encoder
+# from models.deeplab3plus import DeepLabV3Plus
+# from models.backbone import ResNet18Encoder, VGG16Encoder, MobileNetV2Encoder
 # from models.unet import UNet_ResNet18, UNet_MobileNetV2, UNet
-from models.convext import convnext_base, CNBlock
 
+# from models.convnext_official import convnext_base
+# from models.convnext import convnext_base, CNBlock
+
+# from models.convnextv2 import convnextv2_base
+from models.convnext_official import convnextv2_base
 
 
 
@@ -19,7 +23,7 @@ if __name__ == '__main__':
     # MobileNetV2Encoder() → low_level=24,  high_level=96
     # ResNet18Encoder()    → low_level=64,  high_level=256
     # model = DeepLabV3Plus(MobileNetV2Encoder())
-    model  = convnext_base()
+    model  = convnextv2_base()
 
     input_size = (1,3,224,224)
     # dummy_input = torch.randn(input_size)

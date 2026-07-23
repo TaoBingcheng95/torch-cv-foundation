@@ -21,7 +21,6 @@ forward() 返回一个字典，包含每个 block 的输出特征图，
 
 import torch
 import torch.nn as nn
-
 from torchvision.models import AlexNet_Weights
 
 

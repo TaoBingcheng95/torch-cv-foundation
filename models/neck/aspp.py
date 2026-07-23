@@ -73,4 +73,3 @@ class ASPP(nn.Module):
         features.append(pool_feat)
 
         return self.project(torch.cat(features, dim=1))
-

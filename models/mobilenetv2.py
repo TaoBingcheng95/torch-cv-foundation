@@ -19,11 +19,7 @@ import torch
 from torch import nn, Tensor
 from torchvision.models import MobileNet_V2_Weights
 
-from .utils.pytorch_api import _make_divisible, Conv2dNormActivation
-try:
-    from .utils.pytorch_api import _ovewrite_named_param
-except ImportError as e:
-    _ovewrite_named_param = None
+from .utils.pytorch_api import _make_divisible, Conv2dNormActivation, _ovewrite_named_param
 
 
 __all__ = ["MobileNetV2", 
