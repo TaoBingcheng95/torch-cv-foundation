@@ -4,6 +4,7 @@ from sklearn.metrics import accuracy_score, recall_score, precision_score
 from sklearn.metrics import f1_score, fbeta_score
 
 
+
 class MetricsSKLML:
     def __init__(self, truth, pred):
         self.truth = truth.flatten()
@@ -177,6 +178,7 @@ class MetricsSKLML:
     def get_overall_metrics(self):
         """返回全局的指标"""
         return self.overall_metrics
+
 
 
 class MetricsSKL:
@@ -405,6 +407,7 @@ class MetricsSKL:
         return self.overall_metrics
 
 
+
 def prepare_data():
     truth_1 = [1] * 100 + [2] * 11 + [3] * 14 + [4] * 2 + [5] * 3
     predict_1 = [1] * 130
@@ -422,6 +425,7 @@ def prepare_data():
     truth = truth - 1
     pred = pred - 1
     return truth, pred
+
 
 
 if __name__ == '__main__':

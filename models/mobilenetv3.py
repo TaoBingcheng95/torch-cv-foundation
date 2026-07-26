@@ -15,8 +15,8 @@ import torch
 from torch import nn, Tensor
 from torchvision.models import WeightsEnum, MobileNet_V3_Small_Weights, MobileNet_V3_Large_Weights
 
-from .utils.pytorch_api import _make_divisible, Conv2dNormActivation, _ovewrite_named_param
-
+from torchvision.ops.misc import Conv2dNormActivation
+from torchvision.models._utils import _ovewrite_named_param, _make_divisible
 
 
 __all__ = [

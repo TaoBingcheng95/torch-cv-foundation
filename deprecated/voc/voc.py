@@ -1,19 +1,19 @@
-#!/usr/bin/env python
 
 import collections
-# import os.path as osp
 import os
 
 import numpy as np
-import PIL.Image
-import scipy.io
+from PIL import Image
+from matplotlib import pyplot as plt
+
 import torch
-from torch.utils import data
+from torch.utils.data import Dataset
 
 
-class VOCClassSegBase(data.Dataset):
 
-    class_names = np.array([
+class VOCClassSegBase(Dataset):
+
+    VOC_CLASSES = [
         'background',
         'aeroplane',
         'bicycle',
@@ -34,8 +34,31 @@ class VOCClassSegBase(data.Dataset):
         'sheep',
         'sofa',
         'train',
-        'tv/monitor',
-    ])
+        'tv/monitor',]
+    
+    VOC_COLORMAP = [
+        [0, 0, 0],
+        [128, 0, 0],
+        [0, 128, 0],
+        [128, 128, 0],
+        [0, 0, 128],
+        [128, 0, 128],
+        [0, 128, 128],
+        [128, 128, 128],
+        [64, 0, 0],
+        [192, 0, 0],
+        [64, 128, 0],
+        [192, 128, 0],
+        [64, 0, 128],
+        [192, 0, 128],
+        [64, 128, 128],
+        [192, 128, 128],
+        [0, 64, 0],
+        [128, 64, 0],
+        [0, 192, 0],
+        [128, 192, 0],
+        [0, 64, 128],]
+    
     mean_bgr = np.array([104.00698793, 116.66876762, 122.67891434])
 
     def __init__(self, root, split='train', transform=False):
@@ -43,8 +66,7 @@ class VOCClassSegBase(data.Dataset):
         self.split = split
         self._transform = transform
 
-        # VOC2011 and others are subset of VOC2012
-        dataset_dir = os.path.join(self.root, 'VOC/VOCdevkit/VOC2012')
+        dataset_dir = os.path.join(self.root, 'VOCdevkit','VOC2012')
         self.files = collections.defaultdict(list)
         for split in ['train', 'val']:
             imgsets_file = os.path.join(
@@ -66,11 +88,11 @@ class VOCClassSegBase(data.Dataset):
         data_file = self.files[self.split][index]
         # load image
         img_file = data_file['img']
-        img = PIL.Image.open(img_file)
+        img = Image.open(img_file)
         img = np.array(img, dtype=np.uint8)
         # load label
         lbl_file = data_file['lbl']
-        lbl = PIL.Image.open(lbl_file)
+        lbl = Image.open(lbl_file)
         lbl = np.array(lbl, dtype=np.int32)
         lbl[lbl == 255] = -1
         if self._transform:
@@ -95,6 +117,16 @@ class VOCClassSegBase(data.Dataset):
         img = img[:, :, ::-1]
         lbl = lbl.numpy()
         return img, lbl
+    
+    def label2image(self, prelabel):
+        h,w = prelabel.shape
+        prelabel = prelabel.reshape(h*w, -1)
+        image = np.zeros((h*w,3), dtype = np.uint8)
+        for ii in range(21):#共21个类别
+            index = np.where(prelabel == ii) # 找到n维数组中特定数值的下标
+            image[index,:] = self.VOC_COLORMAP[ii]  # cmode(ii)
+        return image.reshape(h, w, 3)
+
 
 
 class VOC2011ClassSeg(VOCClassSegBase):
@@ -114,6 +146,7 @@ class VOC2011ClassSeg(VOCClassSegBase):
             self.files['seg11valid'].append({'img': img_file, 'lbl': lbl_file})
 
 
+
 class VOC2012ClassSeg(VOCClassSegBase):
 
     url = 'http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar'  # NOQA
@@ -121,6 +154,7 @@ class VOC2012ClassSeg(VOCClassSegBase):
     def __init__(self, root, split='train', transform=False):
         super(VOC2012ClassSeg, self).__init__(
             root, split=split, transform=transform)
+
 
 
 class SBDClassSeg(VOCClassSegBase):
@@ -150,7 +184,7 @@ class SBDClassSeg(VOCClassSegBase):
         data_file = self.files[self.split][index]
         # load image
         img_file = data_file['img']
-        img = PIL.Image.open(img_file)
+        img = Image.open(img_file)
         img = np.array(img, dtype=np.uint8)
         # load label
         lbl_file = data_file['lbl']
@@ -161,3 +195,14 @@ class SBDClassSeg(VOCClassSegBase):
             return self.transform(img, lbl)
         else:
             return img, lbl
+
+
+
+if __name__ == '__main__':
+    dataset = VOC2012ClassSeg(root='data')
+    image, label = dataset[0]
+    print(image.shape, label.shape)
+
+    fig = plt.subplots()
+    plt.imshow(label)
+    plt.show()

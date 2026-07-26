@@ -27,10 +27,8 @@ from typing import cast, Optional, Union
 
 import torch
 import torch.nn as nn
-# import torch.functional as F
 from torchvision.models import WeightsEnum
-
-from .utils.pytorch_api import _ovewrite_named_param
+from torchvision.models._utils import _ovewrite_named_param
 
 
 
@@ -40,6 +38,14 @@ __all__ = [
     "VGG",
     "build_vgg",
 ]
+
+
+archs = {
+    "vgg11": "A",
+    "vgg13": "B",
+    "vgg16": "D",
+    "vgg19": "E",
+}
 
 
 cfgs: dict[str, list[Union[str, int]]] = {
@@ -272,9 +278,13 @@ def _vgg(cfg: str,
 
 
 
-def build_vgg(arch:str ='vgg16', cfg:str ='D', 
+def build_vgg(arch:str ='vgg16',
+              cfg:str ='D', 
               weights: Optional[WeightsEnum] = None, 
               progress: bool=True, **kwargs):
+    assert arch in archs, f"Invalid arch: {arch}, supported archs: {archs.keys()}"
+    if cfg not in cfgs:
+        cfg = archs[arch]
     return _vgg(cfg=cfg, batch_norm=False,  weights=weights, progress=progress, **kwargs)
  
 

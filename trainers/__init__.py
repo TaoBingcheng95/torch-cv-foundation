@@ -15,6 +15,7 @@
 # from .segmentation import SemanticSegmentationTask
 # from .simclr import SimCLRTask
 from .basetrainer import BaseTrainer
+from .visualizer import TrainingVisualizer
 
 # from .logger_utils import setup_logging
 
@@ -26,7 +27,8 @@ __all__ = (
     # 'PixelwiseRegressionTask',
     # 'RegressionTask',
     # 'SemanticSegmentationTask',
-    BaseTrainer,
+    'BaseTrainer',
+    'TrainingVisualizer',
     # Self-supervised
     # 'BYOLTask',
     # 'MoCoTask',

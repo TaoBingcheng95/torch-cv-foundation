@@ -517,4 +517,3 @@ if __name__ == '__main__':
     
     model = SimpleFCN()
     summary(model, input_size=input_size)
-

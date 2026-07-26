@@ -7,7 +7,9 @@ import torch
 import torch.nn as nn
 from torchvision.models import WeightsEnum, ViT_B_16_Weights, ViT_B_32_Weights, ViT_L_16_Weights, ViT_L_32_Weights, ViT_H_14_Weights
 
-from .utils.pytorch_api import _ovewrite_named_param, Conv2dNormActivation, MLP
+from torchvision.ops.misc import Conv2dNormActivation, MLP
+from torchvision.models._utils import _ovewrite_named_param
+
 
 
 __all__ = [

@@ -1,7 +1,7 @@
 from collections import OrderedDict
 
 from torch import nn
-from torchvision import models
+from torchvision.models import resnet18, ResNet18_Weights
 
 
 class PredictionHead(nn.Module):
@@ -16,10 +16,11 @@ class PredictionHead(nn.Module):
         return self.head(x)
 
 
+
 class HydraNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.net = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1) # ResNet18_Weights.DEFAULT
+        self.net = resnet18(weights=ResNet18_Weights.DEFAULT)
         self.n_features = self.net.fc.in_features
         self.net.fc = nn.Identity()
         self.age_head = PredictionHead(self.n_features, 1)

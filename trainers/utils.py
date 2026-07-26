@@ -1,16 +1,158 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
+"""
+Common trainer utilities
+"""
 
-"""Common trainer utilities."""
-
+import os
 import warnings
 from collections import OrderedDict
-from typing import cast
+from typing import cast, Any, Dict, List, Optional, Tuple
+import json
+# import logging
+from pathlib import Path
+from dataclasses import dataclass, field
+import numpy as np
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn.modules import Conv2d, Module
+import torch.distributed as dist
+# from torch.utils.data import DataLoader, DistributedSampler
+
+
+
+@dataclass
+class TrainConfig:
+    max_epochs: int = 30
+    batch_size: int = 2
+    num_workers: int = 4
+    lr: float = 1e-4
+    milestones: tuple = (20, 25)
+    gamma: float = 0.1
+    grad_clip_norm: float = 1.0
+    warmup_epochs: int = 5
+    eval_interval: int = 5   # 每 N 个 epoch 评估一次；默认 5，30 epoch 共 6 次评估
+    log_interval: int = 50  # 每 N 个 batch 打印一次；默认 50，减少高频 IO
+    work_dir: str = './checkpoints/tracknetv2'
+    monitor_metric: str = 'PCK@0.10'  # 监控指标：越大越好
+    monitor_mode: str = 'max'
+    gpus: int = 1
+    ddp_port: int = 29500
+    ddp_backend: str = 'nccl'
+
+
+
+class History:
+    def __init__(self, log_path, max_memory_records=5000):
+        self.log_path = Path(log_path)
+        self.records = []
+        self._max_memory_records = max_memory_records # 防止内存溢出
+        self._file_handle = None
+
+    def _get_file_handle(self):
+        if self._file_handle is None or self._file_handle.closed:
+            # 确保目录存在
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._file_handle = open(self.log_path, 'a', encoding='utf-8')
+        return self._file_handle
+
+    def append(self, record):
+        # 写入磁盘并 flush (保证崩溃时数据不丢)
+        fh = self._get_file_handle()
+        fh.write(json.dumps(record, ensure_ascii=False) + '\n')
+        fh.flush()
+        
+        # 内存管理：只保留最近的 N 条记录，用于实时绘图或监控
+        # 如果需要全部历史，可以通过 load() 从磁盘重新读取
+        self.records.append(record)
+        if len(self.records) > self._max_memory_records:
+            # 移除最旧的记录 (FIFO)
+            self.records.pop(0)
+
+    def close(self):
+        """显式关闭文件句柄，比依赖 __del__ 更安全"""
+        if self._file_handle is not None and not self._file_handle.closed:
+            self._file_handle.flush()
+            self._file_handle.close()
+            self._file_handle = None
+
+    def __del__(self):
+        # 作为最后一道防线
+        self.close()
+
+    def get(self, key, phase='train'):
+        # 注意：如果训练步数极多且超出了 max_memory_records，
+        # 这里只能获取到最近的记录。对于绘图（通常按 epoch 聚合）来说完全足够。
+        return [r[key] for r in self.records if r.get('phase') == phase and key in r]
+
+    def load(self):
+        """从磁盘完整加载所有历史记录（用于断点续训后的绘图）"""
+        if not self.log_path.exists():
+            return
+        
+        # 修复：统一使用 utf-8 编码
+        with open(self.log_path, 'r', encoding='utf-8') as f:
+            self.records = [json.loads(line) for line in f if line.strip()]
+
+
+
+
+class EarlyStopping:
+    """
+    早停机制：当验证损失连续 patience 个 epoch 不再改善时提前停止训练。
+
+    职责单一：只负责判断训练是否继续，不涉及模型保存
+    （检查点保存由 Trainer 在 fit 中统一管理）。
+
+    Attributes:
+        patience: 容忍的 epoch 数，超过后停止训练
+        delta: 损失改善的最小阈值
+        verbose: 是否打印详细信息
+    """
+    def __init__(self,
+                 patience: int = 10,
+                 delta: float = 0.0,
+                 verbose: bool = False,
+                 ):
+        self.patience = patience
+        self.delta = delta
+        self.verbose = verbose
+
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.inf
+
+    def __call__(self, val_loss: float, epoch: int) -> None:
+        """
+        检查是否需要早停
+        
+        Args:
+            val_loss: 验证集损失
+            epoch: 当前 epoch
+        """
+        score = -val_loss
+        
+        if self.best_score is None:
+            self.best_score = score
+            self.val_loss_min = val_loss
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'⚠️ EarlyStopping counter: {self.counter} / {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+                if self.verbose:
+                    print(f'🛑 Early stopping triggered at epoch {epoch}')
+        else:
+            if self.verbose:
+                print(f'✨ Validation loss improved: {self.val_loss_min:.6f} → {val_loss:.6f}')
+            self.best_score = score
+            self.val_loss_min = val_loss
+            self.counter = 0
+
+
+
 
 
 def extract_backbone(path: str) -> tuple[str, 'OrderedDict[str, Tensor]']:
@@ -74,8 +216,7 @@ def _get_input_layer_name_and_module(model: Module) -> tuple[str, Module]:
 
 
 def load_state_dict(
-    model: Module, state_dict: 'OrderedDict[str, Tensor]'
-) -> tuple[list[str], list[str]]:
+    model: Module, state_dict: 'OrderedDict[str, Tensor]') -> tuple[list[str], list[str]]:
     """
     Load pretrained resnet weights to a model.
 
@@ -131,8 +272,7 @@ def reinit_initial_conv_layer(
     new_in_channels: int,
     keep_rgb_weights: bool,
     new_stride: int | tuple[int, int] | None = None,
-    new_padding: str | int | tuple[int, int] | None = None,
-) -> Conv2d:
+    new_padding: str | int | tuple[int, int] | None = None,) -> Conv2d:
     """
     Clones a Conv2d layer while optionally retaining some of the original weights.
 
@@ -179,3 +319,23 @@ def reinit_initial_conv_layer(
             cast(Tensor, new_layer.bias).data = b_old
 
     return new_layer
+
+
+
+def setup_distributed() -> tuple[bool, int, int, int]:
+    if "RANK" not in os.environ:
+        return False, 0, 0, 1
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ["WORLD_SIZE"])
+    dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    return True, rank, local_rank, world_size
+
+
+
+def cleanup_distributed() -> None:
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+

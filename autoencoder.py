@@ -10,10 +10,9 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-# import lightning.pytorch as pl
 
 
-class LitAutoEncoder(nn.Module): # pl.LightningModule
+class LitAutoEncoder(nn.Module): 
     def __init__(self):
         super().__init__()
         self.encoder = nn.Sequential(nn.Linear(28 * 28, 128),
@@ -119,6 +118,7 @@ class AutoEncoderModules(nn.Module): #pl.LightningModule
         self.log(f"{prefix}_loss", loss)
 
 
+
 if __name__ == "__main__":
     from torchinfo import summary
     from torchvision.datasets import MNIST
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     input_size = (1, 1, 28, 28)
     # output = autoencoder(torch.randn(input_size))
     # print(output.shape)
-    # summary(autoencoder, input_size=input_size)
+    summary(autoencoder, input_size=input_size)
 
     # # setup data
     # dataset = MNIST("../data", download=True, train=True, transform=ToTensor())

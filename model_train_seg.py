@@ -67,13 +67,10 @@ if __name__ == '__main__':
     )
     # model = UNet(in_channels=3, out_channels=num_classes, use_attention=False)
 
-    # optimizer = torch.optim.Adam(model.parameters(),
-    #                              lr=1e-3,
-    #                              weight_decay=0.0)
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-    #                                            mode='min',
-    #                                            patience=10,
-    #                                            factor=0.1)
+    # 优化器/调度器以配置字典传入，由 optimizers.builder 统一构建
+    optimizer_cfg = {'type': 'sgd', 'lr': 1e-2, 'momentum': 0.9}
+    scheduler_cfg = {'type': 'reducelronplateau', 'mode': 'min', 'patience': 10, 'factor': 0.1}
+
     resume='checkpoints/20241030_124551_Tianchi/epoch_20_acc_0.9301_miou_0.8694.pth'
     tt = BaseTrainer(model=model,
                      device='cuda:0',
@@ -82,9 +79,11 @@ if __name__ == '__main__':
                      test_dataloader=test_dl,
                      resume=resume,
                      num_classes=num_classes,
-                     optimizer_type='sgd',
                      epochs=20,
-                     compile=False # compile model for faster training with pytorch 2.0
+                     optimizer_cfg=optimizer_cfg,
+                     scheduler_cfg=scheduler_cfg,
+                     is_classification=False,  # 分割任务：指标忽略 255，报告额外输出 mIoU/FWIoU
+                     compile_model=False  # compile model for faster training with pytorch 2.0
                      )
     print(tt.save_dir)
     # tt.fit()

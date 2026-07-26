@@ -1,5 +1,8 @@
 from .metrics import Metrics, SegmentationMetric, TorchMetricsWrapper
 
-__all__ = ['TorchMetricsWrapper',
-           'Metrics']
+__all__ = [
+    'Metrics',
+    'SegmentationMetric',
+    'TorchMetricsWrapper',
+]
 

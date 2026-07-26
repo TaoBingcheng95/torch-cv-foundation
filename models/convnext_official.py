@@ -29,7 +29,6 @@ ref: https://arxiv.org/abs/2301.00808 (V2)
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .utils.convnext_api import  LayerNorm, GRN, PatchMerging
 from .utils.utils import DropPath

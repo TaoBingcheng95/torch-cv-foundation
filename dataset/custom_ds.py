@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import List, Annotated, Any, Callable, Union, cast
+from typing import List, Any
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -8,8 +8,8 @@ import matplotlib.patches as mpatches
 from torch.utils.data import Dataset
 from torchvision.transforms import transforms
 
-# from .base import BaseSegmentationDataset
-from . import BaseSegmentationDataset
+from .base import BaseSegmentationDataset
+
 
 
 class NAIPDataset(BaseSegmentationDataset):
@@ -82,6 +82,7 @@ class NAIPDataset(BaseSegmentationDataset):
     #         plt.show()
         
     #     plt.close()
+
 
 
 class WHDLDDataset(Dataset):
@@ -168,6 +169,7 @@ class WHDLDDataset(Dataset):
         self._num_classes = value
 
 
+
 class JiageDataset(Dataset):
     def __init__(self, root, transform=None, **kwargs):
         self.root = root
@@ -229,6 +231,7 @@ class JiageDataset(Dataset):
             # plt.show()
         finally:
             plt.close()
+
 
 
 class TianchiDataset(Dataset):
@@ -304,6 +307,7 @@ class TianchiDataset(Dataset):
             plt.close()
 
 
+
 class UTKFace(Dataset):
     def __init__(self, data_dir):
         self.transform = transforms.Compose([transforms.Resize((32, 32)),
@@ -336,6 +340,7 @@ class UTKFace(Dataset):
                   'gender': gender,
                   'ethnicity':eth}
         return sample
+
 
 
 if __name__ == '__main__':

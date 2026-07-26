@@ -1,308 +1,191 @@
-# https://mp.weixin.qq.com/s/tiqqFdjTip8IaPx6AMXVpQ
-# import os
-import numpy as np
+"""
+通用分割/分类任务的评价指标模块。
+
+核心思路：
+    所有指标均基于 **混淆矩阵 (Confusion Matrix)** 推导。
+    混淆矩阵 shape 为 (num_classes, num_classes)，
+    其中 cm[i, j] 表示真实类别为 i、被预测为 j 的样本数量。
+
+使用流程：
+    metric = SegmentationMetric(num_classes=21)
+    for preds, targets in dataloader:
+        metric.update(preds, targets)
+    results = metric.compute()
+    metric.reset()
+"""
+
+from typing import Optional, Dict
 import torch
 
-from torchmetrics.classification import (
-    MulticlassConfusionMatrix,
-    MulticlassAccuracy,
-    MulticlassJaccardIndex,  # IoU
-    MulticlassPrecision,
-    MulticlassF1Score,
-    MulticlassRecall,
-    CohenKappa,
-)
 
+class Metrics:
+    """
+    基于混淆矩阵的通用分类/分割指标计算器。
+
+    支持指标：
+        - OA  (Overall Accuracy)    总体精度
+        - mPA (Mean Pixel Accuracy) 平均类别精度（即 mean Recall）
+        - mIoU (Mean IoU)           平均交并比
+        - FWIoU (Freq Weighted IoU) 频率加权交并比
+        - Precision / Recall / F1   各类精确率、召回率、F1
+
+    Args:
+        num_classes: 类别总数
+        ignore_index: 忽略的标签索引（如 255 表示未标注区域），不参与计算
+    """
+
+    def __init__(self, num_classes: int, ignore_index: Optional[int] = 255):
+        self.num_classes = num_classes
+        self.ignore_index = ignore_index
+        # 混淆矩阵，使用 float64 避免大样本量时精度丢失
+        self.confusion_matrix = torch.zeros(
+            (num_classes, num_classes), dtype=torch.float64
+        )
+
+    def reset(self):
+        """重置混淆矩阵，开始新一轮评估。"""
+        self.confusion_matrix.zero_()
+
+    @torch.no_grad()
+    def update(self, preds: torch.Tensor, targets: torch.Tensor):
+        """
+        累积一个 batch 的预测结果到混淆矩阵。
+
+        Args:
+            preds: 预测结果。
+                   - 若为 logits/probabilities (N, C, ...) 则自动取 argmax
+                   - 若为类别索引 (N, ...) 则直接使用
+            targets: 真实标签，shape 为 (N, ...) 的整数张量
+        """
+        # 如果 preds 比 targets 多一个维度，说明是 logits，取 argmax
+        if preds.dim() == targets.dim() + 1:
+            preds = preds.argmax(dim=1)
+
+        preds = preds.flatten().long()
+        targets = targets.flatten().long()
+
+        # 过滤 ignore_index
+        if self.ignore_index is not None:
+            valid = targets != self.ignore_index
+            preds = preds[valid]
+            targets = targets[valid]
+
+        # 构建混淆矩阵：行=真实类别，列=预测类别
+        # 利用 bincount 高效统计
+        indices = targets * self.num_classes + preds
+        cm_flat = torch.bincount(indices, minlength=self.num_classes ** 2)
+        self.confusion_matrix += cm_flat.reshape(self.num_classes, self.num_classes)
+
+    def compute(self) -> Dict[str, float]:
+        """
+        根据累积的混淆矩阵计算所有指标。
+
+        Returns:
+            字典，包含 oa, mpa, miou, fwiou 及各指标
+        """
+        cm = self.confusion_matrix
+        eps = 1e-10  # 防止除零
+
+        # 对角线 = TP（每类的正确预测数）
+        tp = torch.diag(cm)
+        # 每行求和 = 该类的真实样本总数（GT count）
+        gt_count = cm.sum(dim=1)
+        # 每列求和 = 被预测为该类的样本总数（Pred count）
+        pred_count = cm.sum(dim=0)
+
+        # ---- Overall Accuracy (OA) ----
+        oa = tp.sum() / (cm.sum() + eps)
+
+        # ---- Per-class Recall (Pixel Accuracy per class) ----
+        recall = tp / (gt_count + eps)
+        mpa = recall.mean()
+
+        # ---- Per-class Precision ----
+        precision = tp / (pred_count + eps)
+
+        # ---- Per-class IoU ----
+        # IoU = TP / (GT + Pred - TP)
+        iou = tp / (gt_count + pred_count - tp + eps)
+        miou = iou.mean()
+
+        # ---- Frequency Weighted IoU ----
+        freq = gt_count / (cm.sum() + eps)
+        fwiou = (freq * iou).sum()
+
+        # ---- Per-class F1 ----
+        f1 = 2 * precision * recall / (precision + recall + eps)
+        mf1 = f1.mean()
+
+        results = {
+            'oa': oa.item(),
+            'mpa': mpa.item(),
+            'miou': miou.item(),
+            'fwiou': fwiou.item(),
+            'mf1': mf1.item(),
+        }
+
+        # 附加各类别详细指标
+        for i in range(self.num_classes):
+            results[f'iou_{i}'] = iou[i].item()
+            results[f'precision_{i}'] = precision[i].item()
+            results[f'recall_{i}'] = recall[i].item()
+            results[f'f1_{i}'] = f1[i].item()
+
+        return results
+
+
+class SegmentationMetric(Metrics):
+    """
+    语义分割专用指标（与 Metrics 完全一致，语义别名）。
+
+    语义分割中每个像素视为一个独立样本，
+    输入 preds/targets 的 shape 通常为 (N, H, W)。
+
+    Example:
+        >>> metric = SegmentationMetric(num_classes=21, ignore_index=255)
+        >>> # preds: (N, 21, H, W) logits 或 (N, H, W) 类别索引
+        >>> metric.update(preds, targets)
+        >>> results = metric.compute()
+        >>> print(f"mIoU: {results['miou']:.4f}")
+    """
+    pass
 
 
 class TorchMetricsWrapper:
     """
-    使用 torchmetrics 复现自定义 Metrics 类的功能
+    torchmetrics 库的轻量包装器（可选依赖）。
+
+    当项目中已安装 torchmetrics 时，可用此类快速接入其丰富的指标实现。
+    若未安装则抛出友好提示。
+
+    Example:
+        >>> from torchmetrics.classification import MulticlassJaccardIndex
+        >>> wrapper = TorchMetricsWrapper(MulticlassJaccardIndex(num_classes=21))
+        >>> wrapper.update(preds, targets)
+        >>> print(wrapper.compute())
     """
-    def __init__(self, num_classes: int, device: str = 'cpu', average: str = 'none'):
-        """
-        :param num_classes: 分类类别数
-        :param device: 计算设备
-        :param average: 
-            - 'none': 返回每类指标 + 总体指标
-            - 'macro': 返回宏平均
-            - 'weighted': 返回加权平均
-        """
-        self.num_classes = num_classes
-        self.device = torch.device(device)
-        self.average = average
-        
-        # 初始化指标（自动处理设备）
-        self.confmat = MulticlassConfusionMatrix(num_classes=num_classes, normalize=None).to(self.device)
-        self.accuracy = MulticlassAccuracy(num_classes=num_classes, average='none' if average == 'none' else average).to(self.device)
-        self.iou = MulticlassJaccardIndex(  # IoU = Jaccard Index
-            num_classes=num_classes, average='none' if average == 'none' else average).to(self.device)
-        self.precision = MulticlassPrecision(num_classes=num_classes, average='none' if average == 'none' else average).to(self.device)
-        self.recall = MulticlassRecall(num_classes=num_classes, average='none' if average == 'none' else average).to(self.device)
-        self.kappa = CohenKappa(task="multiclass", num_classes=num_classes).to(self.device)
-    
-    def reset(self):
-        """重置所有指标状态（每个 epoch 开始前调用）"""
-        self.confmat.reset()
-        self.accuracy.reset()
-        self.iou.reset()
-        self.precision.reset()
-        self.recall.reset()
-        self.kappa.reset()
-    
-    def update(self, preds: torch.Tensor, target: torch.Tensor):
-        """
-        累积一个 batch 的预测结果
-        :param preds: 模型输出的 logits 或 prob，shape=(B, num_classes) 或 (B,)
-        :param target: 真实标签，shape=(B,)
-        """
-        # 如果传入的是 logits，先取 argmax
-        if preds.dim() > 1 and preds.shape[1] == self.num_classes:
-            preds = torch.argmax(preds, dim=1)
-        
-        # 确保标签在有效范围内（自动过滤 -100 等忽略索引）
-        valid_mask = (target >= 0) & (target < self.num_classes)
-        if not valid_mask.any():
-            return
-        
-        preds_valid = preds[valid_mask]
-        target_valid = target[valid_mask]
-        
-        # 批量更新所有指标
-        # print(preds_valid.device)
-        # print(target_valid.device)
-        # print(self.confmat.device)
-        self.confmat.update(preds_valid, target_valid)
-        self.accuracy.update(preds_valid, target_valid)
-        self.iou.update(preds_valid, target_valid)
-        self.precision.update(preds_valid, target_valid)
-        self.recall.update(preds_valid, target_valid)
-        self.kappa.update(preds_valid, target_valid)
-    
-    def compute(self) -> dict:
-        """
-        计算并返回所有指标
-        :return: 与自定义 Metrics 类相同格式的字典
-        """
-        # 获取每类指标（如果 average='none'）
-        acc_per_class = self.accuracy.compute()  # shape: (num_classes,) or scalar
-        iou_per_class = self.iou.compute()
-        precision_per_class = self.precision.compute()
-        recall_per_class = self.recall.compute()
-        
-        # 总体指标
-        total_acc = acc_per_class.mean() if acc_per_class.dim() > 0 else acc_per_class
-        total_iou = iou_per_class.mean() if iou_per_class.dim() > 0 else iou_per_class
-        total_precision = precision_per_class.mean() if precision_per_class.dim() > 0 else precision_per_class
-        total_recall = recall_per_class.mean() if recall_per_class.dim() > 0 else recall_per_class
-        kappa = self.kappa.compute()
-        
-        # 混淆矩阵
-        cfm = self.confmat.compute()  # shape: (num_classes, num_classes)
-        
-        # 构建返回字典（保持与自定义类兼容）
-        results = {
-            'confmat': cfm.cpu().numpy(),  # 可选：返回混淆矩阵
-            'acc': acc_per_class.cpu().tolist() if acc_per_class.dim() > 0 else [acc_per_class.item()],
-            'total_acc': total_acc.item(),
-            'iou': iou_per_class.cpu().tolist() if iou_per_class.dim() > 0 else [iou_per_class.item()],
-            'total_iou': total_iou.item(),
-            'precision': precision_per_class.cpu().tolist() if precision_per_class.dim() > 0 else [precision_per_class.item()],
-            'total_precision': total_precision.item(),
-            'recall': recall_per_class.cpu().tolist() if recall_per_class.dim() > 0 else [recall_per_class.item()],
-            'total_recall': total_recall.item(),
-            'kappa': kappa.item(),
-        }
-        return results
 
-
-class Metrics:
-    def __init__(self, class_num, device='cpu'):
-        self.class_num = class_num
-        self.device = device
-        self.cfm = self.cfm_init(self.class_num)
-
-    def cfm_init(self, class_num, dtype=torch.int64):
-        return torch.zeros(size=(class_num, class_num), dtype=dtype).to(self.device)
+    def __init__(self, metric):
+        """
+        Args:
+            metric: torchmetrics.Metric 实例
+        """
+        try:
+            from torchmetrics import Metric
+            assert isinstance(metric, Metric), (
+                f"期望 torchmetrics.Metric 实例，实际得到 {type(metric)}"
+            )
+        except ImportError:
+            raise ImportError(
+                "TorchMetricsWrapper 需要安装 torchmetrics: pip install torchmetrics"
+            )
+        self.metric = metric
 
     def reset(self):
-        # self.cfm = self.cfm_init(self.class_num)
-        self.cfm.zero_()
+        self.metric.reset()
 
-    def sample_add(self, true_vector, pre_vector):
-        true_vector = true_vector.flatten()
-        pre_vector = pre_vector.flatten()
-        valid_mask = (true_vector >= 0) & (true_vector < self.class_num)
-        if not valid_mask.any():
-            return  # ✅ 无有效样本时直接返回
-        # self.cfm += torch.bincount(self.class_num * true_vector[mask] + pre_vector[mask],
-        #                            minlength=self.class_num ** 2).reshape(self.class_num, self.class_num).to(
-        #     self.device)
-        true_valid = true_vector[valid_mask]
-        pre_valid = pre_vector[valid_mask]
-        
-        # bincount 计算混淆矩阵
-        indices = self.class_num * true_valid + pre_valid
-        cfm_batch = torch.bincount(indices, minlength=self.class_num ** 2)
-        self.cfm += cfm_batch.reshape(self.class_num, self.class_num).to(self.device)
-
-    def acc(self):
-        per_class_acc = torch.diag(self.cfm).float() / torch.sum(self.cfm, dim=1).float()
-        total_acc = torch.diag(self.cfm).sum().float() / self.cfm.sum().float()
-        return per_class_acc, total_acc
-
-    # def iou(self):
-    #     per_class_iou = torch.diag(self.cfm).float() / (
-    #             torch.sum(self.cfm, dim=1).float() + torch.sum(self.cfm, dim=0).float() - torch.diag(
-    #         self.cfm).float())
-    #     total_iou = torch.diag(self.cfm).sum().float() / (
-    #             torch.sum(self.cfm).float() + torch.sum(self.cfm).float() - torch.diag(self.cfm).sum().float())
-    #     return per_class_iou, total_iou
-    def iou(self, eps=1e-6):
-        intersection = torch.diag(self.cfm).float()
-        union = torch.sum(self.cfm, dim=1).float() + torch.sum(self.cfm, dim=0).float() - intersection
-        per_class_iou = torch.where(union > eps, intersection / union, torch.zeros_like(intersection))
-        total_iou = intersection.sum() / (union.sum() + eps)
-        return per_class_iou, total_iou
-
-
-    def precision(self):
-        denominator = torch.sum(self.cfm, dim=0).float()
-        per_class_precision = torch.where(denominator != 0, torch.diag(self.cfm).float() / denominator,
-                                          torch.zeros_like(denominator))
-        total_precision = torch.diag(self.cfm).sum().float() / denominator.sum().float()
-        return per_class_precision, total_precision
-
-
-    def recall(self):
-        denominator = torch.sum(self.cfm, dim=1).float()
-        per_class_recall = torch.where(denominator != 0, torch.diag(self.cfm).float() / denominator,
-                                       torch.zeros_like(denominator))
-        total_recall = torch.diag(self.cfm).sum().float() / denominator.sum().float()
-        return per_class_recall, total_recall
-
-    def kappa(self):
-        total = self.cfm.sum().float()
-
-        # 观察到的准确率
-        p_o = torch.diag(self.cfm).sum() / total
-
-        # 期望的准确率
-        sum_over_rows = torch.sum(self.cfm, dim=1)
-        sum_over_cols = torch.sum(self.cfm, dim=0)
-        p_e = (sum_over_rows * sum_over_cols).sum() / (total * total)
-
-        # 计算Kappa系数
-        kappa = (p_o - p_e) / (1 - p_e)
-        return kappa
+    def update(self, preds: torch.Tensor, targets: torch.Tensor):
+        self.metric.update(preds, targets)
 
     def compute(self):
-        acc = self.acc()
-        iou = self.iou()
-        precision = self.precision()
-        recall = self.recall()
-        kappa = self.kappa()
-        results = {
-            'acc': acc[0].tolist(),  # 每类的准确率
-            'total_acc': acc[1].item(),  # 总体准确率
-            'iou': iou[0].tolist(),  # 每类的 IoU
-            'total_iou': iou[1].item(),  # 总体 IoU
-            'precision': precision[0].tolist(),  # 每类的精确率
-            'total_precision': precision[1].item(),  # 总体精确率
-            'recall': recall[0].tolist(),  # 每类的召回率
-            'total_recall': recall[1].item(),  # 总体召回率
-            'kappa': kappa.item() # Kappa系数
-        }
-
-        return results
-
-
-class SegmentationMetric(object):
-    def __init__(self, numClass, imgPredict, imgLabel):
-        self.numClass = numClass
-        self.confusionMatrix = np.zeros((self.numClass,) * 2)
-        assert imgPredict.shape == imgLabel.shape
-        self.confusionMatrix += self.genConfusionMatrix(imgPredict, imgLabel)
-
-    def pixelAccuracy(self):
-        # return all class overall pixel accuracy
-        #  PA = acc = (TP + TN) / (TP + TN + FP + TN)
-        acc = np.diag(self.confusionMatrix).sum() / self.confusionMatrix.sum()
-        return acc
-
-    def classPixelAccuracy(self):
-        # return each category pixel accuracy(A more accurate way to call it precision)
-        # acc = (TP) / TP + FP
-        classAcc = np.diag(self.confusionMatrix) / self.confusionMatrix.sum(axis=1)
-        return classAcc  # 返回的是一个列表值，如：[0.90, 0.80, 0.96]，表示类别1 2 3各类别的预测准确率
-
-    def meanPixelAccuracy(self):
-        classAcc = self.classPixelAccuracy()
-        meanAcc = np.nanmean(classAcc)  # np.nanmean 求平均值，nan表示遇到Nan类型，其值取为0
-        return meanAcc  # 返回单个值，如：np.nanmean([0.90, 0.80, 0.96, nan, nan]) = (0.90 + 0.80 + 0.96） / 3 =  0.89
-
-    def meanIntersectionOverUnion(self):
-        # Intersection = TP Union = TP + FP + FN
-        # IoU = TP / (TP + FP + FN)
-        intersection = np.diag(self.confusionMatrix)  # 取对角元素的值，返回列表
-        # union = np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) - np.diag(
-        #     self.confusionMatrix)  # axis = 1表示混淆矩阵行的值，返回列表； axis = 0表示取混淆矩阵列的值，返回列表
-        # axis = 1表示混淆矩阵行的值，返回列表； axis = 0表示取混淆矩阵列的值，返回列表
-        union = np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) - intersection
-        IoU = intersection / union  # 返回列表，其值为各个类别的IoU
-        mIoU = np.nanmean(IoU)  # 求各类别IoU的平均
-        return mIoU
-
-    def genConfusionMatrix(self, imgPredict, imgLabel):  # 同FCN中score.py的fast_hist()函数
-        # remove classes from unlabeled pixels in gt image and predict
-        mask = (imgLabel >= 0) & (imgLabel < self.numClass)
-        label = self.numClass * imgLabel[mask] + imgPredict[mask]
-        # print(mask.shape)
-        # print(label.shape)
-        count = np.bincount(label, minlength=self.numClass ** 2)
-        confusionMatrix = count.reshape(self.numClass, self.numClass)
-        return confusionMatrix
-
-    def Frequency_Weighted_Intersection_over_Union(self):
-        # FWIOU =     [(TP+FN)/(TP+FP+TN+FN)] *[TP / (TP + FP + FN)]
-        freq = np.sum(self.confusionMatrix, axis=1) / np.sum(self.confusionMatrix)
-        iu = np.diag(self.confusionMatrix) / (
-                np.sum(self.confusionMatrix, axis=1) + np.sum(self.confusionMatrix, axis=0) -
-                np.diag(self.confusionMatrix))
-        FWIoU = (freq[freq > 0] * iu[freq > 0]).sum()
-        return FWIoU
-
-    def reset(self):
-        self.confusionMatrix = np.zeros((self.numClass, self.numClass))
-
-
-
-if __name__ == '__main__':
-
-    # 假设我们有一个3类的语义分割任务
-    class_num = 3
-    metrics = Metrics(class_num)
-
-    # 模拟一些样本的真实标签和预测标签
-    true_vectors = torch.tensor([0, 1, 2, 1, 0, 2, 2, 1, 0, 1])
-    pred_vectors = torch.tensor([0, 2, 2, 1, 0, 2, 0, 1, 1, 1])
-
-    # 将这些样本添加到混淆矩阵中
-    metrics.sample_add(true_vectors, pred_vectors)
-
-    # 计算所有的指标
-    results = metrics.compute()
-
-    # 输出结果
-    print("评估指标:")
-    for key, value in results.items():
-        print(f"{key}: {value}")
-
-    """
-    img1 = torch.Tensor([[0, 1, 2], [0, 1, 0]])
-    img2 = torch.Tensor([[0, 1, 2], [2, 1, 1]])
-    e = SegmentationMetric(3, img1, img2)
-    print(e.Frequency_Weighted_Intersection_over_Union())
-    print(e.pixelAccuracy())
-    print(e.confusionMatrix)
-    """
+        return self.metric.compute()

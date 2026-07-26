@@ -1,4 +1,6 @@
-
+"""
+Pytorchvison implementation of ConvNeXt
+"""
 from functools import partial
 from typing import Callable, List, Optional, Sequence, Any
 
@@ -8,8 +10,10 @@ from torch.nn import functional as F
 
 from torchvision.models import WeightsEnum, ConvNeXt_Tiny_Weights, ConvNeXt_Small_Weights,ConvNeXt_Base_Weights, ConvNeXt_Large_Weights
 
-from .utils.pytorch_api import Conv2dNormActivation, Permute, StochasticDepth, _ovewrite_named_param
-
+# from .utils.pytorch_api import Conv2dNormActivation, Permute, StochasticDepth, _ovewrite_named_param
+from torchvision.ops.misc import Conv2dNormActivation, Permute
+from torchvision.ops import StochasticDepth
+from torchvision.models._utils import _ovewrite_named_param
 
 
 __all__ = [

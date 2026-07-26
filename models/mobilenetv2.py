@@ -10,6 +10,7 @@ V2 的倒残差：先 1x1 升维 -> 3x3 深度卷积 (Depthwise) -> 1x1 降维�
 线性瓶颈 (Linear Bottlenecks)：
 V2 发现，ReLU 激活函数在低维空间会丢失大量信息（破坏流形）。因此，在倒残差结构的最后一步（降维后的瓶颈处），去掉了 ReLU，改用纯线性映射。
 """
+
 # import warnings
 from typing import Callable, List, Optional, Sequence, Tuple, Union, Any
 # import collections
@@ -18,8 +19,8 @@ from typing import Callable, List, Optional, Sequence, Tuple, Union, Any
 import torch
 from torch import nn, Tensor
 from torchvision.models import MobileNet_V2_Weights
-
-from .utils.pytorch_api import _make_divisible, Conv2dNormActivation, _ovewrite_named_param
+from torchvision.ops.misc import Conv2dNormActivation
+from torchvision.models._utils import _ovewrite_named_param, _make_divisible
 
 
 __all__ = ["MobileNetV2", 
@@ -190,8 +191,7 @@ def mobilenet_v2(
     *, 
     weights: Optional[MobileNet_V2_Weights] = None, 
     progress: bool = False, 
-    **kwargs: Any
-) -> MobileNetV2:
+    **kwargs: Any) -> MobileNetV2:
     """MobileNetV2 architecture from the `MobileNetV2: Inverted Residuals and Linear
     Bottlenecks <https://arxiv.org/abs/1801.04381>`_ paper.
 

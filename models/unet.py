@@ -1,10 +1,10 @@
 import os
 import torch
 import torch.nn as nn
-import torch.nn.functional as F   # 新增导入
+import torch.nn.functional as F
 # import torchvision.models as models
 
-from .backbone import VGG16Encoder, ResNet18Encoder, MobileNetV2Encoder
+from .backbone import ResNet18Encoder, MobileNetV2Encoder
 
 
 
@@ -246,7 +246,6 @@ class UNet_MobileNetV2(nn.Module):
         
         d0 = self.final_up(d1)
         return self.out(d0)
-
 
 
 

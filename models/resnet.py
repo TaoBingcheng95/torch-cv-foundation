@@ -6,8 +6,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from torchvision.models import WeightsEnum, ResNet18_Weights, ResNet34_Weights, ResNet50_Weights, ResNet101_Weights, ResNet152_Weights
-
-from .utils.pytorch_api import _ovewrite_named_param
+from torchvision.models._utils import _ovewrite_named_param
 
 
 
@@ -51,7 +50,6 @@ def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
 
 class BasicBlock(nn.Module):
     expansion: int = 1
-
     def __init__(
         self,
         inplanes: int,
@@ -686,25 +684,4 @@ if __name__ == "__main__":
     input_size = (1, 3, 224, 224)
     # dummy_data = torch.randn(input_size)
     summary(model, input_size=input_size)
-    
-    
 
-    # # ResNet18
-    # m1 = ResNet18(num_classes=10)
-    # m2 = resnet18(num_classes=10)
-    # m1.load_state_dict(m2.state_dict())
-    # m1.eval(); 
-    # m2.eval()
-    # with torch.no_grad():
-    #     diff18 = (m1(x) - m2(x)).abs().max().item()
-    # print(f"ResNet18 差异: {diff18:.2e}")  # 应为 0.00e+00
-
-    # # ResNet50
-    # m1 = ResNet50(num_classes=10)
-    # m2 = resnet50(num_classes=10)
-    # m1.load_state_dict(m2.state_dict())
-    # m1.eval(); 
-    # m2.eval()
-    # with torch.no_grad():
-    #     diff50 = (m1(x) - m2(x)).abs().max().item()
-    # print(f"ResNet50 差异: {diff50:.2e}")  # 应为 0.00e+00

@@ -11,7 +11,7 @@ import torch.nn as nn
 # from models.convnext import convnext_base, CNBlock
 
 # from models.convnextv2 import convnextv2_base
-from models.convnext_official import convnextv2_base
+from models import AlexNet
 
 
 
@@ -23,14 +23,17 @@ if __name__ == '__main__':
     # MobileNetV2Encoder() → low_level=24,  high_level=96
     # ResNet18Encoder()    → low_level=64,  high_level=256
     # model = DeepLabV3Plus(MobileNetV2Encoder())
-    model  = convnextv2_base()
+
+    model  = AlexNet()
 
     input_size = (1,3,224,224)
-    # dummy_input = torch.randn(input_size)
-    # o = model(dummy_input)
-    # print(o.shape)
+    dummy_input = torch.randn(input_size)
+    o = model(dummy_input)
+    print(o.shape)
 
-    summary(model, input_size=input_size)
+    # summary(model, input_size=input_size)
 
     # block = CNBlock(dim=96, layer_scale = 1e-6, stochastic_depth_prob=0.0) # , out_dim=192, kernel_size=3
     # print(block)
+
+

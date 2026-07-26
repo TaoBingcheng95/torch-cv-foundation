@@ -5,109 +5,31 @@ import time
 import datetime
 from tqdm import tqdm
 import numpy as np
-import matplotlib.pyplot as plt
-from typing import Dict, Optional, Any, List, Tuple
+from typing import Dict, Optional, Any, List
 import logging 
 
 import torch
-from torch import nn, optim
+from torch import nn
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 
-from metrics import TorchMetricsWrapper
+from metrics import Metrics
+from optimizers import build_optimizer, build_scheduler, clip_grad_norm
+from .visualizer import TrainingVisualizer
+from .utils import EarlyStopping
+from .logger import get_logger, add_file_handler
+
 
 # 日志配置
-logging.basicConfig(level=logging.INFO, 
-                    format="%(asctime)s - %(levelname)s - %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S")
-logger = logging.getLogger(__name__)
-
-
-class EarlyStopping:
-    """
-    早停机制：当验证损失不再改善时提前停止训练
-    
-    Attributes:
-        patience: 容忍的 epoch 数，超过后停止训练
-        verbose: 是否打印详细信息
-        delta: 损失改善的最小阈值
-        save_fn: 模型保存回调函数
-    """
-    def __init__(self,
-                 patience: int = 10,
-                 delta: float = 0.0,
-                 save_fn: Optional[callable] = None,
-                 verbose: bool = False,
-                 ):
-        self.patience = patience
-        self.delta = delta
-        self.save_fn = save_fn
-        self.verbose = verbose
-
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.inf
-
-    def __call__(
-        self,
-        val_loss: float,
-        model: nn.Module,
-        epoch: int,
-        metrics: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """
-        检查是否需要早停
-        
-        Args:
-            val_loss: 验证集损失
-            model: 模型对象
-            epoch: 当前 epoch
-            metrics: 其他指标字典（可选）
-        """
-        score = -val_loss
-        
-        if self.best_score is None:
-            self.best_score = score
-            self._save_checkpoint(val_loss, model, epoch, metrics)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            if self.verbose:
-                print(f'⚠️ EarlyStopping counter: {self.counter} / {self.patience}')
-            if self.counter >= self.patience:
-                self.early_stop = True
-                if self.verbose:
-                    print(f'🛑 Early stopping triggered at epoch {epoch}')
-        else:
-            if self.verbose:
-                print(f'✨ Validation loss improved: {self.val_loss_min:.6f} → {val_loss:.6f}')
-            self.best_score = score
-            self._save_checkpoint(val_loss, model, epoch, metrics)
-            self.counter = 0
-
-    def _save_checkpoint(
-        self,
-        val_loss: float,
-        model: nn.Module,
-        epoch: int,
-        metrics: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """保存最佳模型检查点"""
-        if self.save_fn:
-            checkpoint = {
-                'val_loss': val_loss,
-                'epoch': epoch,
-                'model': model.state_dict(),
-            }
-            if metrics:
-                checkpoint.update(metrics)
-            self.save_fn(checkpoint)
-        self.val_loss_min = val_loss
-
+# logging.basicConfig(level=logging.INFO, 
+#                     format="%(asctime)s - %(levelname)s - %(message)s",
+#                     datefmt="%Y-%m-%d %H:%M:%S")
+# logger = logging.getLogger(__name__)
+logger = get_logger("BaseTrainer")
 
 class BaseTrainer:
     """
-    通用深度学习训练器，支持分类和分割任务
+    通用深度学习训练器基类，支持分类和分割任务
     
     核心功能:
         - 自动设备检测与分配
@@ -123,6 +45,8 @@ class BaseTrainer:
                  test_dataloader: DataLoader = None,
                  num_classes: int = 2,
                  epochs: int = 10,
+                 log_interval: int = 5,
+                 eval_interval: int = 1,  # 每隔多少个 epoch 验证一次（1 = 每轮都验证）
                  optimizer_cfg: Optional[Dict[str, Any]] = None,
                  scheduler_cfg: Optional[Dict[str, Any]] = None,
                  criterion: nn.Module = nn.CrossEntropyLoss(),  # None 时自动使用 
@@ -133,7 +57,7 @@ class BaseTrainer:
                  max_grad_norm: Optional[float] = None,  # 梯度裁剪
                  class_names: Optional[List[str]] = None,
                  is_classification: bool = True, # 是否为分类任务（影响指标计算和日志记录）
-                 tensorboard_writer: Optional[torch.utils.tensorboard.SummaryWriter] = None,
+                 tensorboard_writer: Optional[Any] = None,  # torch.utils.tensorboard.SummaryWriter
                  **kwargs):
         """
         初始化训练器
@@ -161,21 +85,18 @@ class BaseTrainer:
 
         # 任务配置
         self.num_classes = num_classes
+        self.class_names = class_names or [f'Class-{i}' for i in range(num_classes)]
         self.epochs = epochs
         self.criterion = criterion or nn.CrossEntropyLoss()
-        self.class_names = class_names or [f'Class-{i}' for i in range(num_classes)]
-
+        
         # 优化配置
         self.optimizer = None
         self.scheduler = None
         self.optimizer_cfg = optimizer_cfg
         self.scheduler_cfg = scheduler_cfg
         self.max_grad_norm = max_grad_norm
-        # 检查是否为 batch 级调度器（如 OneCycleLR）
-        self.is_batch_scheduler = (
-            scheduler_cfg and 
-            scheduler_cfg.get("type", "").lower() == "onecyclelr"
-        )
+        # 是否为 batch 级调度器（如 OneCycleLR），在 init_optim_scheduler 中按实例类型判定
+        self.is_batch_scheduler = False
 
         # 恢复训练
         self.resume = resume
@@ -189,17 +110,27 @@ class BaseTrainer:
         self.model_name = None
         # TensorBoard writer（可选）
         self.writer = tensorboard_writer
+        # 可视化器：只持有展示配置（输出目录/类别名），训练数据由调用时显式传入
+        self.visualizer = TrainingVisualizer(
+            save_dir=self.save_dir,
+            class_names=self.class_names,
+            logger=self.logger,
+        )
         # 指标记录
         self.metrics = None
         self.train_loss_all = []
         self.val_loss_all = []
-        self.train_acc_all = []
         self.val_acc_all = []
+        self.val_epochs = []  # 记录每次验证对应的 epoch（eval_interval > 1 时绘图用）
         self.lr_history = []
         self.cnf_matrix = None
         self.val_metrics_result = None
         
         self.is_classification = is_classification
+        # self.epoch = 0
+        self.global_step = 0
+        self.log_interval = log_interval
+        self.eval_interval = max(1, eval_interval)
 
         self.init_settings()
 
@@ -211,6 +142,8 @@ class BaseTrainer:
         # 输出目录
         os.makedirs(self.save_dir, exist_ok=True)
         self.logger.info(f"📁 Output directory: {self.save_dir}")
+        add_file_handler(self.logger, self.save_dir/ "train.log")
+
 
         self.logger.info(f"🤖 Setting up device: {self.device}")
 
@@ -224,9 +157,13 @@ class BaseTrainer:
             self.load_model(self.resume)
             self.model_name = os.path.basename(self.resume)
 
-        # 指标计算器
+        # 指标计算器（基于混淆矩阵，在 CPU 上累积，避免 GPU 内存占用过高）
         self.logger.info("📊 Initializing metrics calculator...")
-        self.metrics = TorchMetricsWrapper(self.num_classes, 'cpu') # 指标计算在 CPU 上进行，避免 GPU 内存占用过高
+        if self.metrics is None:
+            # 分类任务不忽略任何标签；分割任务默认忽略 255（未标注区域）
+            ignore_index = None if self.is_classification else 255
+            self.metrics = Metrics(self.num_classes, ignore_index=ignore_index)
+
         # 模型编译（PyTorch 2.0+）
         if self.compile_model:
             try:
@@ -243,127 +180,32 @@ class BaseTrainer:
             scheduler_cfg: Optional[Dict[str, Any]] = None
             ) -> None:
         """
-        初始化优化器和学习率调度器（支持配置字典 + 工厂模式） 
-        :param optimizer_cfg: 优化器配置字典
-        :param scheduler_cfg: 调度器配置字典
+        初始化优化器和学习率调度器（委托 optimizers.builder 统一构建）
+        :param optimizer_cfg: 优化器配置字典，字段说明见 build_optimizer
+        :param scheduler_cfg: 调度器配置字典，字段说明见 build_scheduler（None 表示固定学习率）
         """
-
-        # 优化器工厂：类型 -> 类映射
-        OPTIMIZER_FACTORY = {
-            "adam": optim.Adam,
-            "adamw": optim.AdamW,
-            "sgd": optim.SGD,
-            "rmsprop": optim.RMSprop,
-            }
-
-        # 调度器工厂
-        SCHEDULER_FACTORY = {
-            "steplr": lr_scheduler.StepLR,
-            "exponentiallr": lr_scheduler.ExponentialLR,
-            "reducelronplateau": lr_scheduler.ReduceLROnPlateau,
-            "cosineannealinglr": lr_scheduler.CosineAnnealingLR,
-            "onecyclelr": lr_scheduler.OneCycleLR,
-            }
-
-        # ========== 优化器配置 ==========
-        default_opt_cfg = {
-            "type": "adam",
-            "lr": 1e-4, # self.lr,
-            "weight_decay": 1e-4 if optimizer_cfg and optimizer_cfg.get("type") == "adamw" else 0,
-            "momentum": 0.9,  # 仅对 SGD 生效
-            "betas": (0.9, 0.999),  # 仅对 Adam/AdamW 生效
-            "eps": 1e-8,  # 仅对 Adam/AdamW 生效
-        }
-        # 合并配置：传入的 cfg 优先
-        if optimizer_cfg:
-            default_opt_cfg.update(optimizer_cfg)
-        opt_cfg = default_opt_cfg
-
-        opt_type = opt_cfg["type"].lower()
-        if opt_type not in OPTIMIZER_FACTORY:
-            raise ValueError(f"Unsupported optimizer: {opt_type}. Available: {list(OPTIMIZER_FACTORY.keys())}")
-        
-        # 提取优化器专用参数（避免传入无关参数报错）
-        opt_class = OPTIMIZER_FACTORY[opt_type]
-        opt_kwargs = {"lr": opt_cfg["lr"], "weight_decay": opt_cfg["weight_decay"]}
-        if opt_type in ["adam", "adamw"]:
-            opt_kwargs["betas"] = opt_cfg.get("betas", (0.9, 0.999))
-            opt_kwargs["eps"] = opt_cfg.get("eps", 1e-8)
-        elif opt_type == "sgd":
-            opt_kwargs["momentum"] = opt_cfg.get("momentum", 0.9)
-            opt_kwargs["nesterov"] = opt_cfg.get("nesterov", True)
-        else:
-            pass
-            # raise ValueError(f"Unsupported optimizer type: {opt_type}")
-        
-        # 创建优化器（自动过滤 requires_grad=False 的参数）
-        self.optimizer = opt_class(
-            filter(lambda p: p.requires_grad, self.model.parameters()), 
-            **opt_kwargs
-        )
-
-        # 记录日志
+        # ========== 优化器 ==========
+        self.optimizer = build_optimizer(self.model, optimizer_cfg)
         self.logger.info(
-            f"🎯 Optimizer: {opt_type.upper()} | "
-            f"LR: {opt_cfg['lr']:.2e} | "
-            f"Weight Decay: {opt_cfg['weight_decay']:.2e}"
+            f"🎯 Optimizer: {type(self.optimizer).__name__} | "
+            f"LR: {self.optimizer.param_groups[0]['lr']:.2e} | "
+            f"Weight Decay: {self.optimizer.param_groups[0]['weight_decay']:.2e} | "
+            f"Param Groups: {len(self.optimizer.param_groups)}"
         )
 
-        # ========== 调度器配置 ==========
-        if scheduler_cfg is None or scheduler_cfg.get("type", "").lower() in ["none", "null", ""]:
-            self.scheduler = None
+        # ========== 调度器 ==========
+        self.scheduler = build_scheduler(
+            self.optimizer,
+            scheduler_cfg,
+            total_epochs=self.epochs,
+            steps_per_epoch=len(self.train_loader) if self.train_loader else None,
+        )
+        if self.scheduler is None:
             self.logger.info("Scheduler: None (using constant learning rate)")
-            return
-        
-        # 默认调度器配置
-        default_sched_cfg = {
-            "type": "steplr",
-            "step_size": 10,
-            "gamma": 0.1,
-            "mode": "min",         # for ReduceLROnPlateau
-            "patience": 5,         # for ReduceLROnPlateau
-            "factor": 0.5,         # for ReduceLROnPlateau
-            "T_max": self.epochs,  # for CosineAnnealingLR
-            "eta_min": 1e-6,       # for CosineAnnealingLR
-        }
-        default_sched_cfg.update(scheduler_cfg)
-        sched_cfg = default_sched_cfg
-
-        sched_type = sched_cfg["type"].lower()
-        if sched_type not in SCHEDULER_FACTORY:
-            raise ValueError(f"Unsupported scheduler: {sched_type}. Available: {list(SCHEDULER_FACTORY.keys())}")
-        
-        sched_class = SCHEDULER_FACTORY[sched_type]
-        
-        # 提取调度器专用参数
-        sched_kwargs = {}
-        if sched_type == "steplr":
-            sched_kwargs = {"step_size": sched_cfg["step_size"], 
-                            "gamma": sched_cfg["gamma"]}
-        elif sched_type == "exponentiallr":
-            sched_kwargs = {"gamma": sched_cfg["gamma"]}
-        elif sched_type == "reducelronplateau":
-            sched_kwargs = {
-                "mode": sched_cfg["mode"], 
-                "factor": sched_cfg["factor"], 
-                "patience": sched_cfg["patience"],
-            }
-        elif sched_type == "cosineannealinglr":
-            sched_kwargs = {"T_max": sched_cfg["T_max"], 
-                            "eta_min": sched_cfg["eta_min"]}
-        elif sched_type == "onecyclelr":
-            # OneCycleLR 需要额外参数，这里简化处理
-            sched_kwargs = {
-                "max_lr": sched_cfg.get("max_lr", opt_cfg["lr"] * 10),
-                "epochs": self.epochs,
-                "steps_per_epoch": len(self.train_loader),
-            }
-        
-        # 创建调度器
-        self.scheduler = sched_class(self.optimizer, **sched_kwargs)
-
-        # 记录日志
-        self.logger.info(f"Scheduler: {sched_type}, Config: {sched_kwargs}")
+        else:
+            self.logger.info(f"Scheduler: {type(self.scheduler).__name__}")
+        # OneCycleLR 在每个 batch 后 step，其余调度器在每个 epoch 后 step
+        self.is_batch_scheduler = isinstance(self.scheduler, lr_scheduler.OneCycleLR)
 
 
     def _step_scheduler(self, val_metrics: Dict[str, float]) -> float:
@@ -379,11 +221,14 @@ class BaseTrainer:
         if self.scheduler is None:
             return self.optimizer.param_groups[0]['lr']
         
-        # OneCycleLR 在 train_step 内已调用
+        # OneCycleLR 在 train_epoch 内按 batch 已调用
         if self.is_batch_scheduler:
             return self.optimizer.param_groups[0]['lr']
         # 区分调度器类型
         if isinstance(self.scheduler, lr_scheduler.ReduceLROnPlateau):
+            # 本轮未验证：Plateau 依赖验证指标，跳过 step（其余调度器不受影响）
+            if val_metrics is None:
+                return self.optimizer.param_groups[0]['lr']
             monitor_key = getattr(self.scheduler, 'monitor', None) or \
                          self.scheduler_cfg.get('monitor', 'loss')
             mode = getattr(self.scheduler, 'mode', 'min')
@@ -452,11 +297,10 @@ class BaseTrainer:
         init_lr = self.optimizer.param_groups[0]['lr']
         self.logger.info(f"🎯 Initial LR: {init_lr:.2e}")
 
-        save_fn = lambda ckpt: self.save_model(f"best.pt",checkpoint=ckpt)
+        # 早停器：只负责停训判断，best.pt 的保存由下方训练循环按 val_acc 统一管理
         early_stopper = EarlyStopping(
             patience=self.scheduler_cfg.get("patience", 5) if self.scheduler_cfg else 5,
-            save_fn=save_fn,
-            verbose=True,
+            verbose=False,
         )
 
         best_val_acc = 0.0
@@ -466,38 +310,23 @@ class BaseTrainer:
             self.logger.info(f"📅 Epoch {self.current_epoch}/{self.epochs}")
             
             # 训练
-            train_results = self.train_step()
-            # 验证
-            if self.val_loader is not None:
-                val_results = self.evaluate()
-            else:
-                self.logger.warning("⚠️ No validation loader, skipping validation")
-                val_results = {'loss': 0.0, 'acc': 0.0, 'time': 0.0}
-            # 调整学习率
-            current_lr = self._step_scheduler(val_results)
-            self.lr_history.append(current_lr)
+            train_results = self.train_epoch()
 
-            # # 调度器调整学习率（关键！区分类型）
-            # if self.scheduler is not None and not self.is_batch_scheduler:
-            #     if isinstance(self.scheduler, lr_scheduler.ReduceLROnPlateau):
-            #         # ReduceLROnPlateau 需要手动传入监控指标
-            #         monitor_key = self.scheduler_cfg.get("monitor", "loss")  # 'loss' or 'acc'
-            #         metric = val_results[monitor_key]
-            #         # 如果监控准确率，需要取负（因为 ReduceLROnPlateau 默认找最小值）
-            #         if monitor_key == "acc":
-            #             metric = -metric  # 或设置 mode='max'
-            #         self.scheduler.step(metric)
-            #         current_lr = self.optimizer.param_groups[0]['lr']
-            #         self.logger.info(f"LR adjusted by ReduceLROnPlateau: {current_lr:.2e} (metric: {monitor_key}={val_results[monitor_key]:.4f})")
-            #     else:
-            #         # 其他调度器：按 epoch 自动调整
-            #         self.scheduler.step()
-            #         current_lr = self.optimizer.param_groups[0]['lr']
-            #         self.logger.info(f"LR adjusted by {type(self.scheduler).__name__}: {current_lr:.2e}")
-            # else:
-            #     # 无调度器：记录当前固定学习率
-            #     current_lr = self.optimizer.param_groups[0]['lr']
-            #     self.logger.debug(f"LR (fixed): {current_lr:.2e}")
+            # 验证：每 eval_interval 轮一次；最后一轮强制验证，确保 best.pt 能覆盖末期模型
+            should_validate = self.val_loader is not None and (
+                self.current_epoch % self.eval_interval == 0
+                or self.current_epoch == self.epochs
+            )
+            if should_validate:
+                val_metrics = self.evaluate_epoch()
+            else:
+                val_metrics = None
+                if self.val_loader is None:
+                    self.logger.warning("⚠️ No validation loader, skipping validation")
+
+            # 调整学习率（Plateau 类调度器仅在有验证结果的轮次 step）
+            current_lr = self._step_scheduler(val_metrics)
+            self.lr_history.append(current_lr)
 
             # ========== ✅ 保存最新模型 (last.pt) ==========
             last_checkpoint = {
@@ -505,149 +334,140 @@ class BaseTrainer:
                 'model': self.model.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
-                'val_loss': val_results['loss'],
-                'val_acc': val_results['acc'],
+                'val_loss': val_metrics['loss'] if val_metrics else None,
+                'val_acc': val_metrics['acc'] if val_metrics else None,
                 'train_loss': train_results['loss'],
-                'train_acc': train_results['acc'],
             }
             self.save_model('last.pt', checkpoint=last_checkpoint)
 
-            # ========== ✅ 保存最佳模型 (best.pt + 详细文件名) ==========
-            val_acc = val_results['acc']
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                best_checkpoint = {
-                    'val_acc': best_val_acc,
-                    'epoch': self.current_epoch,
-                    'model': self.model.state_dict(),
-                    'optimizer': self.optimizer.state_dict(),
-                    'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
-                    'config': {  # ✅ 额外保存配置，方便复现
-                        'optimizer_cfg': self.optimizer_cfg,
-                        'scheduler_cfg': self.scheduler_cfg,
+            # ========== ✅ 验证轮次专属：保存最佳模型 + 早停判断 ==========
+            if val_metrics is not None:
+                val_acc = val_metrics['acc']
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_checkpoint = {
+                        'val_acc': best_val_acc,
+                        'epoch': self.current_epoch,
+                        'model': self.model.state_dict(),
+                        'optimizer': self.optimizer.state_dict(),
+                        'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
+                        'config': {  # ✅ 额外保存配置，方便复现
+                            'optimizer_cfg': self.optimizer_cfg,
+                            'scheduler_cfg': self.scheduler_cfg,
+                        }
                     }
-                }
-                
-                # 保存固定文件名 best.pt（方便加载）
-                self.save_model('best.pt', checkpoint=best_checkpoint)
-                
-                # 保存带指标的详细文件名（用于归档）
-                # detailed_name = f"epoch_{self.current_epoch}_acc_{val_acc:.4f}.pt"
-                # self.save_model(detailed_name, checkpoint=best_checkpoint)
-                
-                self.logger.info(
-                    f"✨ New best model saved! | "
-                    f"Epoch: {self.current_epoch} | "
-                    f"Val Acc: {val_acc:.4f} | "
-                    f"Val Loss: {val_results['loss']:.4f}"
-            )
-            
-            # 早停检查
-            early_stopper(
-                model=self.model,
-                val_loss=val_results['loss'], 
-                epoch=self.current_epoch,
-                metrics={'val_acc': val_acc})
-            if early_stopper.early_stop:
-                self.logger.info("🛑 Early stopping triggered")
-                break
 
-            # 定期测试
-            if (self.current_epoch) % 10 == 0:
-                test_results = self.test(report_results=False)
-                self.logger.info(
-                    f"🧪 Test | "
-                    f"Loss: {test_results['loss']:.4f} | "
-                    f"Acc: {test_results['acc']:.4f}"
-                )
+                    # 保存固定文件名 best.pt（方便加载）
+                    self.save_model('best.pt', checkpoint=best_checkpoint)
+
+                    self.logger.info(
+                        f"✨ New best model saved! | "
+                        f"Epoch: {self.current_epoch} | "
+                        f"Val Acc: {val_acc:.4f} | "
+                        f"Val Loss: {val_metrics['loss']:.4f}"
+                    )
+
+                # 早停检查（仅判断是否继续训练，不保存模型；
+                # eval_interval > 1 时 patience 按“验证次数”而非 epoch 数计）
+                early_stopper(
+                    val_loss=val_metrics['loss'], 
+                    epoch=self.current_epoch)
+                if early_stopper.early_stop:
+                    self.logger.info("🛑 Early stopping triggered")
+                    break
+
+        # 最终测试前恢复最佳权重（主流做法：早停只管停训，评估用最佳模型）
+        # 若不恢复，早停退出时内存中是触发轮次的较差权重，测试报告会失真
+        best_path = self.save_dir / 'best.pt'
+        if best_path.exists():
+            self.logger.info("📥 Restoring best.pt for final evaluation...")
+            self.load_model(str(best_path))
+        else:
+            self.logger.warning("⚠️ best.pt not found, evaluating with last-epoch weights")
 
         # 最终测试
         self.logger.info(f"\n{'='*60}")
         self.logger.info("🎯 Running final test...")
         final_test = self.test(report_results=True, save_predictions=True)
         self.cnf_matrix = final_test['cnf_matrix']
-        # self.logger.info(f"Test Loss: {final_test['loss']:.4f} | Acc: {final_test['acc']:.4f}")
-        # 可视化
-        self.plot_acc_loss(save_path=os.path.join(self.save_dir, 'acc_loss.png'))
+        # 可视化（绘图逻辑见 trainers/visualizer.py，训练数据显式传入）
+        if self.train_loss_all and self.val_loss_all:
+            self.visualizer.plot_acc_loss(
+                train_loss=self.train_loss_all,
+                val_loss=self.val_loss_all,
+                val_acc=self.val_acc_all,
+                val_epochs=self.val_epochs,
+                save_path=os.path.join(self.save_dir, 'acc_loss.png'),
+            )
         if self.lr_history:
-            self.plot_lr_history(save_path=os.path.join(self.save_dir, 'lr_curve.png'))
+            self.visualizer.plot_lr_history(
+                self.lr_history,
+                save_path=os.path.join(self.save_dir, 'lr_curve.png'),
+            )
         if self.is_classification and self.cnf_matrix is not None:
-            self.plot_confusion_matrix(
+            self.visualizer.plot_confusion_matrix(
                 cm=self.cnf_matrix,
-                class_names=self.class_names,
                 normalize=False,
                 save_path=self.save_dir / 'confusion_matrix.png'
             )
-            self.plot_confusion_matrix(
+            self.visualizer.plot_confusion_matrix(
                 cm=self.cnf_matrix,
-                class_names=self.class_names,
                 normalize=True,
                 save_path=self.save_dir / 'confusion_matrix_normalized.png'
             )
 
 
-    def train_step(self) -> Dict[str, Any]:
+    def train_epoch(self) -> Dict[str, Any]:
         """
-        执行一个 epoch 的训练
-        
+        执行一个 epoch 的训练流程：数据搬运、反向传播、优化器/调度器 step、日志记录。
+        前向推理与损失计算委托给 training_step（子类可覆写）。
+        训练阶段不计算精度指标，只跟踪损失/学习率（指标评估由 evaluate/test 负责）。
+
         Returns:
-            训练结果字典 {'loss', 'acc', 'time'}
+            训练结果字典 {'loss', 'time'}
         """
         total_loss = 0.0
         total_samples = 0
         start_time = time.time()
-        self.metrics.reset()
         self.model.train()
 
-        # 记录当前学习率（用于日志）
-        current_lr = self.optimizer.param_groups[0]['lr']
         if self.current_epoch == 1:
             self.logger.info("start training ...")
+
         pbar = tqdm(self.train_loader, 
-                    desc=f'Epoch {self.current_epoch}/Train', 
-                    leave=False)
+                    desc=f'Epoch {self.current_epoch}/{self.epochs} [Train]', 
+                    # leave=False
+                    )
 
         for batch_idx, (inputs, targets) in enumerate(pbar):
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
 
-                # # 调试模式：打印第一个 batch 的统计信息
-                # if self.current_epoch == 0 and batch_idx == 0:
-                #     print(f"[DEBUG] Input shape: {inputs.shape}, Range: [{inputs.min():.3f}, {inputs.max():.3f}]")
-                #     print(f"[DEBUG] Targets: {targets[:10].tolist()}")
-                #     print(f"[DEBUG] Outputs shape: {outputs.shape}, Requires grad: {outputs.requires_grad}")
-
-                # 前向 + 反向传播
+                # 前向 + 反向传播（前向推理与损失计算见 training_step）
                 self.optimizer.zero_grad(set_to_none=True) 
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets)
+                loss = self.training_step(inputs, targets)
                 loss.backward()
 
                 # 梯度裁剪（防止爆炸，可选）
                 if self.max_grad_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.max_grad_norm)
+                    clip_grad_norm(self.model, self.max_grad_norm)
 
                 self.optimizer.step()
+                self.global_step += 1
 
                 # ✅ OneCycleLR 需要在 batch 后调用 step()
                 if self.scheduler is not None and self.is_batch_scheduler:
                     self.scheduler.step()
 
-                # 指标累积
+                # 损失累积
                 batch_size = inputs.size(0)
                 total_loss += loss.item() * batch_size  # 加权累加
                 total_samples += batch_size
 
-                preds = torch.argmax(outputs, dim=1).detach().cpu()
-                # convert to CPU！！！
-                targets_cpu = targets.detach().cpu()  # 也转 CPU，避免设备不匹配
-                self.metrics.update(preds, targets_cpu)
-
-                # 批次级日志（每 50 个 batch 更新一次进度条）
-                if batch_idx % 50 == 0:
+                # 批次级日志（每 log_interval 个 batch 更新一次进度条）
+                if batch_idx % self.log_interval == 0:
+                    current_lr = self.optimizer.param_groups[0]['lr']
                     pbar.set_postfix({
                         'loss': f'{loss.item():.4f}',
                         'lr': f'{current_lr:.2e}'
@@ -661,43 +481,58 @@ class BaseTrainer:
                 else:
                     raise e
 
-        # 计算汇总指标
+        # 计算平均损失
         avg_loss = total_loss / total_samples  # 加权平均更准确
-        results = self.metrics.compute()
-        train_acc = results.get('total_acc', 0.0)
 
-        # 记录训练元数据
+        # 记录训练元数据（epoch 末重新取 lr，避免 batch 级调度器下的过期值）
+        current_lr = self.optimizer.param_groups[0]['lr']
         epoch_time = time.time() - start_time
         samples_per_sec = total_samples / epoch_time
         # 记录到 TensorBoard（如果启用）
         if self.writer is not None:
             self.writer.add_scalar("train/epoch_loss", avg_loss, self.current_epoch)
-            self.writer.add_scalar("train/epoch_acc", train_acc, self.current_epoch)
             self.writer.add_scalar("train/learning_rate", current_lr, self.current_epoch)
             self.writer.add_scalar("train/samples_per_sec", samples_per_sec, self.current_epoch)
             
         self.train_loss_all.append(avg_loss)
-        self.train_acc_all.append(train_acc)
 
         # 日志
         self.logger.info(
             f"🏃 Train | "
             f"Loss: {avg_loss:.4f} | "
-            f"Acc: {train_acc:.4f} | "
             f"LR: {current_lr:.2e} | "
             f"Speed: {samples_per_sec:.0f} samples/sec"
         )
 
         return  {'loss': avg_loss, 
-                 'acc': train_acc, 
                  'time': epoch_time}
+
+
+    def training_step(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        单个 batch 的前向推理 + 损失计算（不含反向传播）。
+
+        子类可覆写此方法实现自定义训练逻辑
+        （如多输出模型、多任务损失、深监督等）。
+
+        Args:
+            inputs: 输入张量（已在目标设备上）
+            targets: 真实标签（已在目标设备上）
+
+        Returns:
+            标量损失张量（需保留计算图供 backward）
+        """
+        logits = self.model(inputs)
+        loss = self.criterion(logits, targets)
+        return loss
 
  
     @torch.no_grad()
-    def evaluate(self) -> Dict[str, Any]:
+    def evaluate_epoch(self) -> Dict[str, Any]:
         """
-        在验证集上评估模型
-        
+        在验证集上评估模型。
+        前向推理、损失计算与指标累积委托给 validation_step（子类可覆写）。
+
         Returns:
             验证结果字典 {'loss', 'acc', 'time'}
         """
@@ -708,29 +543,26 @@ class BaseTrainer:
         self.metrics.reset()
         self.model.eval()
 
-        # self.logger.info("🧪 Running evaluation...")
         pbar = tqdm(self.val_loader, 
-                    desc=f'Epoch {self.current_epoch}/Valid', 
-                    leave=False)
+                    desc=f'Epoch {self.current_epoch}/{self.epochs} [Valid]', 
+                    # leave=False
+                    )
+
         for batch_idx, (inputs, targets) in enumerate(pbar):
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
 
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets)
+                # 前向推理 + 损失 + 指标累积（见 validation_step）
+                loss = self.validation_step(inputs, targets)
 
                 # 加权累加损失
                 batch_size = inputs.size(0)
                 total_loss += loss.item() * batch_size
                 total_samples += batch_size
 
-                preds = torch.argmax(outputs, dim=1).detach().cpu()
-                targets_cpu = targets.detach().cpu()
-                self.metrics.update(preds, targets_cpu)
-                
                 # 进度条实时更新
-                if batch_idx % 20 == 0:
+                if batch_idx % self.log_interval == 0:
                     pbar.set_postfix({'loss': f'{loss.item():.4f}'})
             except RuntimeError as e:
                 # 异常处理：跳过问题 batch
@@ -744,7 +576,7 @@ class BaseTrainer:
         # 计算汇总指标
         avg_loss = total_loss / total_samples
         results = self.metrics.compute()
-        val_acc = results['total_acc']
+        val_acc = results['oa']  # OA: Overall Accuracy
 
         # 记录元数据
         val_time = time.time() - start_time
@@ -756,9 +588,10 @@ class BaseTrainer:
             self.writer.add_scalar("val/epoch_acc", val_acc, self.current_epoch)
             self.writer.add_scalar("val/samples_per_sec", samples_per_sec, self.current_epoch)
         
-        # 更新历史列表
+        # 更新历史列表（val_epochs 记录对应轮次，eval_interval > 1 时绘图对齐用）
         self.val_loss_all.append(avg_loss)
         self.val_acc_all.append(val_acc)
+        self.val_epochs.append(self.current_epoch)
         self.val_metrics_result = results  # 保留详细结果供后续分析
         
         self.logger.info(
@@ -771,19 +604,30 @@ class BaseTrainer:
         # 可选：记录详细指标到 debug 日志
         # self.logger.debug(f"Validation metrics detail: {results}")
 
-        # avg_loss = total_loss /self.val_count #len(self.train_loader.dataset)
-        # 计算并记录指标
-        # results = self.metrics.compute()
-        # self.val_metrics_result = results
-        # self.logger.info("Validation metrics:")
-        # for key, value in results.items():
-        #     self.logger.info(f"{key}: {value}")
-        # val_acc = results['total_acc']
-        # self.val_acc_all.append(val_acc)
-        # self.val_loss_all.append(avg_loss)
         return {'loss': avg_loss, 
                 'acc': val_acc, 
                 'time': val_time}
+
+
+    def validation_step(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        单个 batch 的验证逻辑：前向推理 + 损失计算 + 指标累积。
+
+        子类可覆写此方法实现自定义验证逻辑（如多输出模型、自定义指标更新）。
+
+        Args:
+            inputs: 输入张量（已在目标设备上）
+            targets: 真实标签（已在目标设备上）
+
+        Returns:
+            标量损失张量
+        """
+        logits = self.model(inputs)
+        loss = self.criterion(logits, targets)
+        # Metrics 的混淆矩阵在 CPU 上，先搬运避免 GPU 训练时设备不匹配
+        # （logits 传入后由 Metrics.update 自动 argmax）
+        self.metrics.update(logits.detach().cpu(), targets.detach().cpu())
+        return loss
 
 
     @torch.no_grad()
@@ -862,8 +706,9 @@ class BaseTrainer:
         # 计算汇总指标
         avg_loss = total_loss / total_samples
         results = self.metrics.compute()
-        test_acc = results.get('total_acc', 0.0)
-        cnf_matrix = results.get('confmat')
+        test_acc = results.get('oa', 0.0)
+        # 混淆矩阵从指标计算器直接获取，转 numpy 供绘图使用
+        cnf_matrix = self.metrics.confusion_matrix.cpu().numpy()
 
         test_time = time.time() - start_time
         samples_per_sec = total_samples / test_time
@@ -884,12 +729,14 @@ class BaseTrainer:
                     f.write('\n'.join(map(str, errors)))
                 print(f"❌ {len(errors)} errors logged to {error_path}")
         
-        # 打印详细测试报告
+        # 打印详细测试报告（报告格式化见 trainers/visualizer.py）
         if report_results:
-            self._print_test_report(results, test_time, samples_per_sec)
+            self.visualizer.print_test_report(
+                results, cnf_matrix, test_time, samples_per_sec,
+                is_classification=self.is_classification,
+            )
         
-        return {# **results,  #  展开 metrics 的所有指标 (total_acc, confmat, etc.)
-                'loss': avg_loss, 
+        return {'loss': avg_loss, 
                 'acc': test_acc, 
                 'time': test_time, 
                 'samples': total_samples, 
@@ -1033,238 +880,3 @@ class BaseTrainer:
         )
 
         print(f"✅ Model exported to ONNX: {output_path}")
-
-
-
-    def plot_lr_history(self, save_path: str = None):
-        """绘制学习率变化曲线"""
-        if not hasattr(self, 'lr_history') or not self.lr_history:
-            return
-        
-        plt.figure(figsize=(8, 4))
-        plt.plot(self.lr_history, 'bo-', label='Learning Rate')
-        plt.xlabel('Epoch')
-        plt.ylabel('Learning Rate (log scale)')
-        plt.yscale('log')  # 对数坐标更清晰
-        plt.title('Learning Rate Schedule')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            self.logger.info(f"📈 LR curve saved to {save_path}")
-        # plt.show()
-        plt.close()
-
-
-    def _print_test_report(
-        self,
-        results: Dict[str, Any],
-        elapsed_time: float,
-        speed: float
-    ) -> None:
-        """打印格式化的测试报告"""
-        print("\n" + "=" * 60)
-        print("🧪 TEST REPORT".center(60))
-        print("=" * 60)
-        
-        print(f"\n📊 Overall Metrics:")
-        print(f"  • Accuracy     : {self._fmt(results.get('total_acc'), '.2f', scale=100, suffix='%')}")
-        # print(f"  • Loss         : {self._fmt(results.get('loss'))}")
-        if results.get('kappa') is not None:
-            print(f"  • Kappa        : {self._fmt(results['kappa'])}")
-        if results.get('total_iou') is not None:
-            print(f"  • Mean IoU     : {self._fmt(results['total_iou'], '.2f', scale=100, suffix='%')}")
-        
-        # 每类指标
-        if 'acc' in results and isinstance(results['acc'], list) and len(results['acc']) == self.num_classes:
-            print(f"\n📋 Per-Class Accuracy:")
-            for cls_idx, acc in enumerate(results['acc']):
-                cls_name = self.class_names[cls_idx] if hasattr(self, 'class_names') else f"Class-{cls_idx}"
-                print(f"  • {cls_name:12s}: {self._fmt(acc, '.2f', scale=100, suffix='%')}")
-        
-        # 性能指标
-        print(f"\n⚡ Performance:")
-        print(f"  • Samples      : {results.get('samples', 'N/A')}")
-        print(f"  • Time         : {self._fmt(elapsed_time, '.2f', suffix='s')}")
-        print(f"  • Speed        : {self._fmt(speed, '.0f', suffix=' samples/sec')}")
-        # 混淆矩阵摘要
-        if hasattr(self.metrics, 'confmat') and self.metrics.confmat is not None:
-            cfm = self.metrics.confmat.compute()
-            print(f"\n🔍 Confusion Matrix Summary:")
-            print(f"  • Diagonal (correct)   : {torch.diag(cfm).sum().item()}")
-            print(f"  • Off-diagonal (error) : {cfm.sum().item() - torch.diag(cfm).sum().item()}")
-        
-        print("=" * 60 + "\n")
-
-
-
-
-    def plot_acc_loss(self, save_path=None):
-        """绘制训练/验证损失和准确率曲线"""
-        if not (self.train_loss_all and self.val_loss_all and self.train_acc_all and self.val_acc_all):
-            raise ValueError("One or more of the data lists is empty or None.")
-
-        plt.figure(figsize=(12, 4))
-
-        plt.subplot(1, 2, 1)
-        plt.plot(self.train_loss_all, 'ro-', label='Train Loss')
-        plt.plot(self.val_loss_all, 'bs-', label='Val Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Train and Validation Loss')
-        plt.legend()
-        plt.grid(True)
-
-        plt.subplot(1, 2, 2)
-        plt.plot(self.train_acc_all, 'ro-', label='Train Acc')
-        plt.plot(self.val_acc_all, 'bs-', label='Val Acc')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.title('Train and Validation Accuracy')
-        plt.legend()
-        plt.grid(True)
-
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path)
-        # plt.show()
-        plt.close()
-
-
-    def plot_lr_history(self, save_path: Optional[str] = None) -> None:
-        """绘制学习率变化曲线"""
-        if not self.lr_history:
-            return
-        
-        plt.figure(figsize=(8, 4))
-        plt.plot(self.lr_history, 'bo-', label='Learning Rate', linewidth=2)
-        plt.xlabel('Epoch')
-        plt.ylabel('Learning Rate (log scale)')
-        plt.yscale('log')
-        plt.title('Learning Rate Schedule')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            self.logger.info(f"📈 LR curve saved to {save_path}")
-        
-        plt.close()
-
-
-    @staticmethod
-    def plot_confusion_matrix(
-        cm: np.ndarray,
-        class_names: List[str],
-        normalize: bool = False,
-        title: str = 'Confusion Matrix',
-        cmap: str = 'Blues',
-        save_path: Optional[str] = None,
-        figsize: Tuple[int, int] = (10, 8),
-        fontsize: int = 10,
-        show_values: bool = True,
-        value_format: Optional[str] = None,
-    ) -> plt.Figure:
-        """
-        绘制混淆矩阵
-        
-        Args:
-            cm: 混淆矩阵 (num_classes × num_classes)
-            class_names: 类别名称列表
-            normalize: 是否按行归一化
-            title: 图表标题
-            cmap: 颜色映射
-            save_path: 保存路径
-            figsize: 画布大小
-            fontsize: 字体大小
-            show_values: 是否显示数值
-            value_format: 数值格式
-        
-        Returns:
-            matplotlib Figure 对象
-        """
-        cm_display = cm.copy()
-        if normalize:
-            with np.errstate(divide='ignore', invalid='ignore'):
-                cm_display = cm_display.astype('float') / cm_display.sum(axis=1, keepdims=True)
-                cm_display = np.nan_to_num(cm_display)
-        
-        if value_format is None:
-            value_format = '.1%' if normalize else '.0f'
-        
-        fig, ax = plt.subplots(figsize=figsize, dpi=100)
-        
-        im = ax.pcolormesh(cm_display, cmap=cmap, edgecolors='white', linewidths=0.5)
-        
-        tick_marks = np.arange(len(class_names))
-        ax.set_xticks(tick_marks + 0.5)
-        ax.set_yticks(tick_marks + 0.5)
-        ax.set_xticklabels(class_names, rotation=45, ha='right', fontsize=fontsize)
-        ax.set_yticklabels(class_names, fontsize=fontsize)
-        ax.invert_yaxis()
-        
-        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label('Count' if not normalize else 'Proportion', rotation=270, labelpad=20)
-        
-        ax.set_title(title, fontsize=fontsize + 2, pad=20)
-        ax.set_xlabel('Predicted Label', fontsize=fontsize)
-        ax.set_ylabel('True Label', fontsize=fontsize)
-
-        if show_values:
-            thresh = cm_display.max() / 2.0 if not normalize else 0.5
-            for i in range(len(class_names)):
-                for j in range(len(class_names)):
-                    val = cm_display[i, j]
-                    text = f"{val:{value_format}}"
-                    color = 'white' if val > thresh else 'black'
-                    ax.text(j + 0.5, i + 0.5, text, ha='center', va='center',
-                           color=color, fontsize=fontsize - 2)
-        
-        if len(class_names) <= 20:
-            for i in range(len(class_names)):
-                rect = plt.Rectangle((i, i), 1, 1, fill=False,
-                                    edgecolor='gold', linewidth=2, alpha=0.5)
-                ax.add_patch(rect)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            save_dir = os.path.dirname(save_path)
-            if save_dir:
-                os.makedirs(save_dir, exist_ok=True)
-            fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-            print(f"📁 Confusion matrix saved to {save_path}")
-        
-        return fig
-
-
-    def _fmt(
-        self,
-        val: Optional[float],
-        pattern: str = ".4f",
-        default: str = "N/A",
-        scale: float = 1.0,
-        suffix: str = ""
-    ) -> str:
-        """
-        安全格式化数值
-        
-        Args:
-            val: 数值
-            pattern: 格式化模式
-            default: 默认值（当 val 为 None 时）
-            scale: 缩放因子
-            suffix: 后缀字符串
-        
-        Returns:
-            格式化后的字符串
-        """
-        if val is None:
-            return default
-        try:
-            return f"{val * scale:{pattern}}{suffix}"
-        except (TypeError, ValueError):
-            return default
