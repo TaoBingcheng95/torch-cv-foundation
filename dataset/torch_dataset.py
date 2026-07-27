@@ -106,6 +106,9 @@ class MNISTDataLoader:
             shuffle=True,                      # 训练集必须 shuffle
             num_workers=self.num_workers,      # 初学者建议设为 0，避免 Windows 多进程报错
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
 
@@ -116,6 +119,9 @@ class MNISTDataLoader:
             shuffle=False,      # 验证集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
 
@@ -126,6 +132,9 @@ class MNISTDataLoader:
             shuffle=False,      # 测试集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
     
@@ -243,8 +252,11 @@ class FashionMNISTDataLoader:
             dataset=self.train_ds,
             batch_size=self.batch_size,
             shuffle=True,       # 训练集必须 shuffle
-            num_workers=0,       # 初学者建议设为 0，避免 Windows 多进程报错
+            num_workers=self.num_workers,       # 初学者建议设为 0，避免 Windows 多进程报错
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
 
@@ -254,8 +266,11 @@ class FashionMNISTDataLoader:
             dataset=self.val_ds,
             batch_size=self.batch_size,
             shuffle=False,      # 验证集不能 shuffle
-            num_workers=0,
+            num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
 
@@ -265,8 +280,11 @@ class FashionMNISTDataLoader:
             dataset=self.test_ds, 
             batch_size=self.batch_size, 
             shuffle=False,      # 测试集不能 shuffle
-            num_workers=0,
+            num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+            # num_workers=0 时必须为 False，否则 DataLoader 报错
+            persistent_workers=self.num_workers > 0,
             # multiprocessing_context='spawn' if sys.platform.startswith('win') else None
         )
 
@@ -318,16 +336,21 @@ class FashionMNISTDataLoader:
 
 
 class CIFAR10DataLoader:
-    def __init__(self, root='./data',
-                 download=False,
-                 val_split=0.1,      # 默认从训练集分 10% 做验证
-                 batch_size=64,
-                 seed=42,            # 固定随机种子
-                 ):
+    def __init__(self, root: str='./data',
+                 download:bool =False,
+                 val_split: float=0.1,      # 默认从训练集分 10% 做验证
+                 batch_size: int=64,
+                 seed: int=42,            # 固定随机种子
+                 pin_memory: bool = True,
+                 num_workers: int = 0,
+                 device: str ='cuda'):
         super().__init__()
 
         self.root = root
         self.batch_size = batch_size
+        self.pin_memory = pin_memory
+        self.num_workers = num_workers
+        self.device = device
         
         # CIFAR-10 标准归一化参数
         self.mean = (0.4914, 0.4822, 0.4465)
@@ -372,14 +395,29 @@ class CIFAR10DataLoader:
             self.train_ds = self.full_train_ds
             self.val_ds = self.test_ds
 
-    def train_dataloader(self, num_workers=0):
-        return DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True, num_workers=num_workers)
+    def train_dataloader(self):
+        return DataLoader(self.train_ds, 
+                          batch_size=self.batch_size, 
+                          shuffle=True, 
+                          num_workers=self.num_workers,
+                          # 跨 epoch 复用 worker，避免 spawn 平台（macOS/Windows）每轮重建开销；
+                          # num_workers=0 时必须为 False，否则 DataLoader 报错
+                          persistent_workers=self.num_workers > 0,
+                          )
 
-    def val_dataloader(self, num_workers=0):
-        return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False, num_workers=num_workers)
+    def val_dataloader(self):
+        return DataLoader(self.val_ds, 
+                          batch_size=self.batch_size, 
+                          shuffle=False, 
+                          num_workers=self.num_workers,
+                          persistent_workers=self.num_workers > 0,)
 
     def test_dataloader(self, num_workers=0):
-        return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False, num_workers=num_workers)
+        return DataLoader(self.test_ds, 
+                          batch_size=self.batch_size, 
+                          shuffle=False, 
+                          num_workers=self.num_workers,
+                          persistent_workers=self.num_workers > 0,)
 
     @property
     def num_classes(self) -> int:

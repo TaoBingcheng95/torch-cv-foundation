@@ -1,4 +1,6 @@
 import os
+import sys
+import psutil
 import random
 # import shutil
 import numpy as np
@@ -6,6 +8,52 @@ from shutil import copy2
 import matplotlib.pyplot as plt
 
 import torch
+
+
+
+def get_smart_num_workers():
+    """获取一个智能且稳健的 num_workers 基准值（跨平台/容器感知）。"""
+    # 1. 进程实际可用的 CPU 数：Linux 上优先用调度亲和性
+    #    （感知 Docker/K8s 等 cgroup 限核，避免容器内按宿主机核数超订）
+    if hasattr(os, 'sched_getaffinity'):
+        available = len(os.sched_getaffinity(0))
+    else:
+        # macOS / Windows 无 sched_getaffinity，退回物理核心数
+        available = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+
+    # 2. spawn 平台（macOS/Windows）worker 启动开销大（子进程重新 import 主模块），
+    #    少开一些，并由 DataLoader 的 persistent_workers 跨 epoch 复用 worker
+    if sys.platform != 'linux':
+        return max(1, min(available // 2, 4))
+
+    # 3. Linux（fork）：worker 创建廉价，上限 8 并为主进程保留一个核心
+    return max(1, min(available, 8) - 1)
+
+
+
+def auto_pin_memory(device):
+    """判断是否使用 pin_memory 加速数据传输到 GPU。"""
+    # 1. Linux 上 spawn platform（macOS/Windows）fork 无法使用 pin_memory
+    if sys.platform != 'linux':
+        return False
+    
+    # 2. GPU 无可用
+    if not torch.cuda.is_available():
+        print("No GPU available, setting pin_memory=False")
+        return False
+    
+    device = torch.device(device)
+    if device.type == 'cpu':
+        pin_memory = False
+    else:
+        pin_memory = (device.type == 'cuda')
+
+    return pin_memory
+
+
+
+################################# 数据处理函数 #################################
+
 
 
 def transfer_channel(image):

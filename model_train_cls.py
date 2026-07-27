@@ -1,78 +1,72 @@
-# https://mp.weixin.qq.com/s/ZsKwD-Cb1ynqvCdBIWlZgw
 import os
-from tkinter.constants import N
+import sys
 import psutil
+import argparse
 
 import torch
-from torch import nn
-from torch.utils.tensorboard import SummaryWriter
+# from torch import nn 
+# from torch.utils.tensorboard import SummaryWriter
 
-from dataset import MNISTDataLoader, FashionMNISTDataLoader
+from dataset import MNISTDataLoader, FashionMNISTDataLoader, auto_pin_memory, get_smart_num_workers
 from models import AlexNet, LeNet5
 from trainers import BaseTrainer
 # from optimizers import build_optimizer, build_scheduler, clip_grad_norm
 from loss import CEWithLogitsLoss
 
+from utils.hardware import select_device
 
 torch.set_float32_matmul_precision('medium')
-os.environ['TORCHDYNAMO_VERBOSE'] = '1' # 避免显存碎片化导致的 OOM 错误
+# os.environ['TORCHDYNAMO_VERBOSE'] = '1'
 
 
 
-def get_smart_num_workers():
-    """获取一个智能且稳健的 num_workers 基准值。"""
-    # 1. 获取物理核心数
-    physical_cores = psutil.cpu_count(logical=False)
-    if physical_cores is None:
-        physical_cores = os.cpu_count() or 1
-
-    # 2. 根据物理核心数设置一个安全的基准值 (例如，不超过核心数，且最大值设为8)
-    # 对于大多数消费级CPU，8个worker通常足够
-    safe_value = min(physical_cores, 8)
-    
-    # 3. 为关键任务保留一个核心
-    if safe_value > 1:
-        safe_value -= 1
-        
-    return max(1, safe_value) # 至少为1
+def parse_args():
+    parser = argparse.ArgumentParser(description='PyTorch Training Script')
+    parser.add_argument('--device', default='auto', help='Device to use (auto/cpu/cuda/mps)')
+    parser.add_argument('--output_dir', default='checkpoints', help='Output directory for checkpoints')
+    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs to train')
+    parser.add_argument('--batch_size', default=16, type=int, help='Batch size for training')
+    parser.add_argument('--learning_rate', default=1e-3, type=float, help='Learning rate for optimizer')
+    parser.add_argument('--resume', default='', help='Path to the checkpoint to resume from')
+    parser.add_argument('--compile', action='store_true', help='Compile model for faster training')
+    return parser.parse_args()
 
 
 
 if __name__ == '__main__':
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    args = parse_args()
+
+    device = select_device(args.device)
+    print(f"Using device: {device}")
     if device.type == 'cuda':
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-    output_dir='checkpoints'
-    ephocs = 100
-
-    if device.type == 'cpu':
-        pin_memory = False
-    else:
-        pin_memory = True
     
+    output_dir=args.output_dir
+    epochs = args.epochs
+    learning_rate = args.learning_rate
+
+    pin_memory = auto_pin_memory(device)
     optimal_workers = get_smart_num_workers()
-    print(f"根据您的硬件，推荐的基准 num_workers 值为: {optimal_workers}")
+    print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
     dm = FashionMNISTDataLoader(root='./data',
                                 download=True,
                                 use_normalize=True,
                                 val_split=0.2,
-                                batch_size=16,
-                                pin_memory=pin_memory, # torch.cuda.is_available()
+                                batch_size=args.batch_size,
+                                pin_memory=pin_memory,
                                 num_workers=optimal_workers
                                 )
     train_dl = dm.train_dataloader()
     val_dl = dm.val_dataloader()
     test_dl = dm.test_dataloader()
-    num_calsses = dm.num_classes
+    num_classes = dm.num_classes
+    # x, y = next(iter(train_dl))
+    # print(x.shape, y.shape)
 
-    x, y = next(iter(train_dl))
-    print(x.shape, y.shape)
-
-    model = LeNet5(num_classes=num_calsses) # SimpleDenseNet(output_size=dm.num_classes)
+    model = LeNet5(num_classes=num_classes)
     criterion = CEWithLogitsLoss()  # nn.CrossEntropyLoss()
-    learning_rate = 1e-3
     # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
     # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, factor=0.1)
     optim_cfg = {
@@ -83,29 +77,28 @@ if __name__ == '__main__':
     # optimizer = build_optimizer(model, optim_cfg)
     sched_cfg = {
         "type": "reduceLROnPlateau",
-        "mode": "min",
+        "mode": "max",  # 与 BaseTrainer 默认 monitor='acc'（max 方向）对齐
         "patience": 5,
         "factor": 0.5,}
     # scheduler = build_scheduler(optimizer, sched_cfg)
 
     # compile model for faster training with pytorch 2.0
-    compile_model= False
+    compile_model= args.compile
 
     tt = BaseTrainer(model=model,
                      device=device,
                      output_dir=output_dir,
                      # resume=resume,
-                     epochs=ephocs,
-                     
-                     num_classes=num_calsses,
+                     epochs=epochs,
+                     num_classes=num_classes,
                      train_dataloader=train_dl,
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
-
                      criterion=criterion,
                      optimizer_cfg=optim_cfg,
                      scheduler_cfg=sched_cfg,
-
                     compile_model=compile_model,
                     )
     tt.fit()
+    # fit/test 已解耦：训练结束后手动调用 test()（内部已恢复 best.pt 权重）
+    tt.test(report_results=True, save_predictions=True)
