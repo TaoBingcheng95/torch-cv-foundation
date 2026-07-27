@@ -7,8 +7,8 @@ import torch
 # from torch import nn 
 # from torch.utils.tensorboard import SummaryWriter
 
-from dataset import MNISTDataLoader, FashionMNISTDataLoader, auto_pin_memory, get_smart_num_workers
-from models import AlexNet, LeNet5
+from dataset import auto_pin_memory, get_smart_num_workers, MNISTDataLoader, FashionMNISTDataLoader, CIFAR10DataLoader
+from models import AlexNet, LeNet5, build_vgg
 from trainers import BaseTrainer
 # from optimizers import build_optimizer, build_scheduler, clip_grad_norm
 from loss import CEWithLogitsLoss
@@ -46,12 +46,13 @@ if __name__ == '__main__':
     epochs = args.epochs
     learning_rate = args.learning_rate
 
-    pin_memory = auto_pin_memory(device)
     optimal_workers = get_smart_num_workers()
+    pin_memory = auto_pin_memory(device, num_workers=optimal_workers)
+    
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
     dm = FashionMNISTDataLoader(root='./data',
-                                download=True,
+                                download=False,
                                 use_normalize=True,
                                 val_split=0.2,
                                 batch_size=args.batch_size,
@@ -62,10 +63,11 @@ if __name__ == '__main__':
     val_dl = dm.val_dataloader()
     test_dl = dm.test_dataloader()
     num_classes = dm.num_classes
-    # x, y = next(iter(train_dl))
-    # print(x.shape, y.shape)
+    x, y = next(iter(train_dl))
+    print(x.shape, y.shape)
 
     model = LeNet5(num_classes=num_classes)
+    # model = build_vgg(arch='vgg11')
     criterion = CEWithLogitsLoss()  # nn.CrossEntropyLoss()
     # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
     # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, factor=0.1)
@@ -75,11 +77,14 @@ if __name__ == '__main__':
         "weight_decay": 1e-4,
         "betas": (0.9, 0.999),}
     # optimizer = build_optimizer(model, optim_cfg)
-    sched_cfg = {
-        "type": "reduceLROnPlateau",
-        "mode": "max",  # 与 BaseTrainer 默认 monitor='acc'（max 方向）对齐
-        "patience": 5,
-        "factor": 0.5,}
+    # sched_cfg = {
+    #     "type": "reduceLROnPlateau",
+    #     "mode": "min",  # 与 BaseTrainer 默认 monitor='acc'（max 方向）对齐
+    #     "patience": 5,
+    #     "factor": 0.5,}
+    sched_cfg =  {"type": "warmup_cosine",
+                  "total_epochs": 30, 
+                  "warmup_epochs": 5}
     # scheduler = build_scheduler(optimizer, sched_cfg)
 
     # compile model for faster training with pytorch 2.0

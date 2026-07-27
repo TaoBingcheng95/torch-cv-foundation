@@ -12,43 +12,41 @@ import torch
 
 
 def get_smart_num_workers():
-    """获取一个智能且稳健的 num_workers 基准值（跨平台/容器感知）。"""
-    # 1. 进程实际可用的 CPU 数：Linux 上优先用调度亲和性
-    #    （感知 Docker/K8s 等 cgroup 限核，避免容器内按宿主机核数超订）
+    """获取推荐 num_workers，感知容器限制并适配平台。"""
+    # 获取可用 CPU 核心数（容器友好）
     if hasattr(os, 'sched_getaffinity'):
         available = len(os.sched_getaffinity(0))
     else:
-        # macOS / Windows 无 sched_getaffinity，退回物理核心数
-        available = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+        available = os.cpu_count() or 1  # Windows/macOS 直接使用
 
-    # 2. spawn 平台（macOS/Windows）worker 启动开销大（子进程重新 import 主模块），
-    #    少开一些，并由 DataLoader 的 persistent_workers 跨 epoch 复用 worker
     if sys.platform != 'linux':
+        # spawn 平台：保守取值，最多 4 个 worker
         return max(1, min(available // 2, 4))
-
-    # 3. Linux（fork）：worker 创建廉价，上限 8 并为主进程保留一个核心
-    return max(1, min(available, 8) - 1)
-
-
-
-def auto_pin_memory(device):
-    """判断是否使用 pin_memory 加速数据传输到 GPU。"""
-    # 1. Linux 上 spawn platform（macOS/Windows）fork 无法使用 pin_memory
-    if sys.platform != 'linux':
-        return False
-    
-    # 2. GPU 无可用
-    if not torch.cuda.is_available():
-        print("No GPU available, setting pin_memory=False")
-        return False
-    
-    device = torch.device(device)
-    if device.type == 'cpu':
-        pin_memory = False
     else:
-        pin_memory = (device.type == 'cuda')
+        # Linux (fork)：保留一个核心给主进程，无硬性上限（但可设 cap）
+        # 如果你希望限制上限，可以用 min(available, 16) 等，这里建议不设限
+        return max(1, available - 1)
 
-    return pin_memory
+
+def auto_pin_memory(device, num_workers=0):
+    """智能判断是否使用 pin_memory，考虑平台和 num_workers。"""
+    if not torch.cuda.is_available():
+        return False
+
+    dev = torch.device(device) if device is not None else torch.device('cuda')
+    if dev.type != 'cuda':
+        return False
+
+    # Windows 上，若 num_workers > 0，pin_memory 易导致死锁或错误，强制禁用
+    if sys.platform == 'win32' and num_workers > 0:
+        return False
+
+    # macOS 上，spawn 机制同样有风险，保守禁用（除非 num_workers=0）
+    if sys.platform == 'darwin' and num_workers > 0:
+        return False
+
+    # Linux 且 num_workers >= 0 时均可启用（但 num_workers=0 时其实无加速效果，但仍可开）
+    return True
 
 
 

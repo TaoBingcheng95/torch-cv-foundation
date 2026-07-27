@@ -149,9 +149,14 @@ class _VOCBase(Dataset):
 #  语义分割
 # ======================================================================
 
-class VOCClassSegBase(_VOCBase):
+class VOC2012ClassSeg(_VOCBase):
     """
-    Pascal VOC 语义分割数据集基类
+    Pascal VOC 2012 语义分割数据集
+
+    继承 :class:`_VOCBase`，固定使用 VOC2012 版本。
+    官方数据: http://host.robots.ox.ac.uk/pascal/VOC/voc2012/
+
+    训练集 1464 张，验证集 1449 张，共 21 个类别（含背景）。
 
     读取 ``ImageSets/Segmentation/{split}.txt`` 中列出的样本，
     返回 (image, label) 对。标注中像素值含义：
@@ -166,6 +171,7 @@ class VOCClassSegBase(_VOCBase):
             - ``True``: 使用内置 BGR 均值减除变换，返回 Tensor
             - callable: 自定义变换函数，接收 (img_np, lbl_np) 返回 (img, lbl)
     """
+    url = 'http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar'
 
     def __init__(self, root, split='train', transform=False):
         super().__init__(root, split=split, task='Segmentation')
@@ -260,21 +266,6 @@ class VOCClassSegBase(_VOCBase):
         for cls_id in range(self.NUM_CLASSES):
             color[label == cls_id] = self.VOC_COLORMAP[cls_id]
         return color
-
-
-class VOC2012ClassSeg(VOCClassSegBase):
-    """Pascal VOC 2012 语义分割数据集
-
-    继承 :class:`VOCClassSegBase`，固定使用 VOC2012 版本。
-    官方数据: http://host.robots.ox.ac.uk/pascal/VOC/voc2012/
-
-    训练集 1464 张，验证集 1449 张，共 21 个类别（含背景）。
-    """
-
-    url = 'http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar'
-
-    def __init__(self, root, split='train', transform=False):
-        super().__init__(root, split=split, transform=transform)
 
 
 # ======================================================================
@@ -505,9 +496,6 @@ class VOC2012Classification(_VOCBase):
         return [VOC_CLASSES[i + 1] for i in range(20) if labels[i] == 1]
 
 
-# ======================================================================
-#  演示
-# ======================================================================
 
 if __name__ == '__main__':
 

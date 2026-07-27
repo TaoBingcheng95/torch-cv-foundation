@@ -35,7 +35,6 @@ from torchvision.models._utils import _ovewrite_named_param
 __all__ = [
     "VGG16",
     "VGG19",
-    "VGG",
     "build_vgg",
 ]
 

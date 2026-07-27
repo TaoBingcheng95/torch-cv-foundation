@@ -1,3 +1,4 @@
+import platform
 
 import numpy as np
 import torch
@@ -17,6 +18,10 @@ from models import AlexNet
 
 if __name__ == '__main__':
     from torchinfo import summary
+
+
+    print("platform", platform.platform(),)
+    print("machine", platform.machine())
     
     # 通道数现在由 backbone.out_channels 自动推导，无需手动传入
     # VGG16Encoder()       → low_level=128, high_level=512
@@ -24,12 +29,12 @@ if __name__ == '__main__':
     # ResNet18Encoder()    → low_level=64,  high_level=256
     # model = DeepLabV3Plus(MobileNetV2Encoder())
 
-    model  = AlexNet()
+    # model  = AlexNet()
 
-    input_size = (1,3,224,224)
-    dummy_input = torch.randn(input_size)
-    o = model(dummy_input)
-    print(o.shape)
+    # input_size = (1,3,224,224)
+    # dummy_input = torch.randn(input_size)
+    # o = model(dummy_input)
+    # print(o.shape)
 
     # summary(model, input_size=input_size)
 
