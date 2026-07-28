@@ -19,7 +19,7 @@ __all__ = [
     "GoogLeNetOutputs",
     "GoogLeNet",
     "BasicConv2d", "Inception", "InceptionAux",
-    "googlenet",
+    "build_googlenet",
 ]
 
 # According to the writing of the official library of Torchvision
@@ -147,14 +147,9 @@ class GoogLeNet(nn.Module):
         super().__init__()
         if blocks is None:
             blocks = [BasicConv2d, Inception, InceptionAux]
-        # if init_weights is None:
-        #     warnings.warn(
-        #         "The default weight initialization of GoogleNet will be changed in future releases of "
-        #         "torchvision. If you wish to keep the old behavior (which leads to long initialization times"
-        #         " due to scipy/scipy#11299), please set init_weights=True.",
-        #         FutureWarning,
-        #     )
-        #     init_weights = True
+        # torchvision 历史行为：init_weights 未指定时默认启用自定义初始化
+        if init_weights is None:
+            init_weights = True
         if len(blocks) != 3:
             raise ValueError(f"blocks length should be 3 instead of {len(blocks)}")
         conv_block = blocks[0]

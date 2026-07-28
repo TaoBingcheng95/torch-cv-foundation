@@ -11,6 +11,8 @@ os.environ['MASTER_ADDR'] = 'localhost'
 os.environ['MASTER_PORT'] = '5678'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
 
+
+
 class SimpleModel(nn.Module):
     def __init__(self):
         super(SimpleModel, self).__init__()

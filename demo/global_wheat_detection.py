@@ -1,5 +1,4 @@
 # https://www.global-wheat.com/
-# https://www.global-wheat.com/
 # https://mp.weixin.qq.com/s/57IqCF_ZPx5U1azeVb0YdA
 
 from PIL import Image

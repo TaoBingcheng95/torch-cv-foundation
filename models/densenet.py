@@ -248,7 +248,7 @@ def _densenet(
 
 
 
-def densenet121(**kwargs: Any) -> DenseNet:
+def densenet121(*, weights: Optional[WeightsEnum] = None, progress: bool = True, **kwargs: Any) -> DenseNet:
     r"""Densenet-121 model from
     `Densely Connected Convolutional Networks <https://arxiv.org/abs/1608.06993>`_.
 
@@ -267,11 +267,11 @@ def densenet121(**kwargs: Any) -> DenseNet:
     .. autoclass:: torchvision.models.DenseNet121_Weights
         :members:
     """
-    return _densenet(32, (6, 12, 24, 16), 64, None, False, **kwargs)
+    return _densenet(32, (6, 12, 24, 16), 64, weights, progress, **kwargs)
 
 
 
-def densenet161(**kwargs: Any) -> DenseNet:
+def densenet161(*, weights: Optional[WeightsEnum] = None, progress: bool = True, **kwargs: Any) -> DenseNet:
     r"""Densenet-161 model from
     `Densely Connected Convolutional Networks <https://arxiv.org/abs/1608.06993>`_.
 
@@ -290,11 +290,11 @@ def densenet161(**kwargs: Any) -> DenseNet:
     .. autoclass:: torchvision.models.DenseNet161_Weights
         :members:
     """
-    return _densenet(48, (6, 12, 36, 24), 96, None, False, **kwargs)
+    return _densenet(48, (6, 12, 36, 24), 96, weights, progress, **kwargs)
 
 
 
-def densenet169(**kwargs: Any) -> DenseNet:
+def densenet169(*, weights: Optional[WeightsEnum] = None, progress: bool = True, **kwargs: Any) -> DenseNet:
     r"""Densenet-169 model from
     `Densely Connected Convolutional Networks <https://arxiv.org/abs/1608.06993>`_.
 
@@ -313,11 +313,11 @@ def densenet169(**kwargs: Any) -> DenseNet:
     .. autoclass:: torchvision.models.DenseNet169_Weights
         :members:
     """
-    return _densenet(32, (6, 12, 32, 32), 64, None, False, **kwargs)
+    return _densenet(32, (6, 12, 32, 32), 64, weights, progress, **kwargs)
 
 
 
-def densenet201(**kwargs: Any) -> DenseNet:
+def densenet201(*, weights: Optional[WeightsEnum] = None, progress: bool = True, **kwargs: Any) -> DenseNet:
     r"""Densenet-201 model from
     `Densely Connected Convolutional Networks <https://arxiv.org/abs/1608.06993>`_.
 
@@ -337,4 +337,4 @@ def densenet201(**kwargs: Any) -> DenseNet:
         :members:
     """
 
-    return _densenet(32, (6, 12, 48, 32), 64, None, False, **kwargs)
+    return _densenet(32, (6, 12, 48, 32), 64, weights, progress, **kwargs)

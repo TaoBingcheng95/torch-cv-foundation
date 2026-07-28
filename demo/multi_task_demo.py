@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, random_split
 from dataset.components.custom_ds import UTKFace
 from models.deprecated.HydraNet import HydraNet
 
+
 if __name__ == '__main__':
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -1,9 +1,9 @@
 import time
-
 import warnings
 from contextlib import contextmanager
 
 import torch
+
 
 
 class TimeCounter:
@@ -119,6 +119,7 @@ class TimeCounter:
                     flush=True)
 
 
+
 def count_time(func):
     def fun(*args, **kwargs):
         t = time.perf_counter()
@@ -129,11 +130,13 @@ def count_time(func):
     return fun
 
 
+
 @count_time
 def test():
     print('func start')
     time.sleep(3)
     print('func end')
+
 
 
 def demo_count_time():
@@ -149,6 +152,7 @@ def demo_count_time():
         fun1()
         for _ in range(2):
             fun2()
+
 
 
 def demo_profile_time():
@@ -181,6 +185,7 @@ def demo_profile_time():
         #     print('start test profile_time 1')
         #     time.sleep(3)
         #     print('end test profile_time 1 ')
+
 
 
 if __name__ == '__main__':

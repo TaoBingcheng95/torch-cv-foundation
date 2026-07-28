@@ -151,7 +151,7 @@ class UNet_ResNet18(nn.Module):
         super().__init__()
         
         # Encoder: 5 阶段，32 倍下采样
-        self.encoder = ResNet18Encoder(pretrained=pretrained_encoder)
+        self.encoder = ResNet18Encoder(weights=pretrained_encoder)
         
         # 通道数对齐层：将 initial 的输出 (64通道) 降维到 32通道，
         # 以便与上一层 Decoder 输出的 32 通道完美拼接 (32+32=64)
@@ -186,11 +186,6 @@ class UNet_ResNet18(nn.Module):
 
         # 对齐最浅层特征的通道数
         x0_aligned = self.align_x0(x0)
-        print(f"x0 shape: {x0.shape}")
-        print(f"x1 shape: {x1.shape}")
-        print(f"x2 shape: {x2.shape}")
-        print(f"x3 shape: {x3.shape}")
-        print(f"x4 shape: {x4.shape}")
         
         # Decoder 阶段：自底向上融合
         d4 = self.up4(x4, x3)
@@ -212,7 +207,7 @@ class UNet_MobileNetV2(nn.Module):
         super().__init__()
         
         # 1. Encoder: 通道数序列 [16, 24, 32, 96, 320]
-        self.encoder = MobileNetV2Encoder(pretrained=pretrained_encoder)
+        self.encoder = MobileNetV2Encoder(weights=pretrained_encoder)
         
         # 2. Decoder: skip_channels = skip 特征图的实际通道数
         # up4: 接收 f4(320) -> reduce到96 + f3(96) = 192 -> 输出 96
@@ -238,7 +233,7 @@ class UNet_MobileNetV2(nn.Module):
         self.out = nn.Conv2d(16, num_classes, kernel_size=1)
 
     def forward(self, x):
-        f0, f1, f2, f3, f4 = self.encoder(x)
+        f0, f1, f2, f3, f4 = self.encoder(x).values()
         d4 = self.up4(f4, f3)
         d3 = self.up3(d4, f2)
         d2 = self.up2(d3, f1)

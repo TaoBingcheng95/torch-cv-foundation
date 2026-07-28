@@ -75,8 +75,10 @@ class AlexEncoder(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2),                    # 12
         )
         if weights:
-            self.load_state_dict(AlexNet_Weights.DEFAULT.get_state_dict(progress=True, check_hash=True), 
-                                strict=False)
+            # strict=False 用于丢弃预训练权重中的 classifier.*，但 features.* 必须全部命中
+            missing_keys, _ = self.load_state_dict(
+                AlexNet_Weights.DEFAULT.get_state_dict(progress=True, check_hash=True), strict=False)
+            assert not missing_keys, f"Missing keys when loading pretrained weights: {missing_keys}"
 
         # ============================================================
         # 将 features 拆分为 5 个独立 block

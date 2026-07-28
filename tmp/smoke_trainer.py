@@ -27,6 +27,7 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
         model=model,
         train_dataloader=make_loader(),
         val_dataloader=make_loader(32),
+        test_dataloader=make_loader(32),
         num_classes=3,
         epochs=epochs,
         eval_interval=eval_interval,
@@ -38,6 +39,8 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
         class_names=['cat', 'dog', 'bird'],
     )
     trainer.fit()
+    # fit/test 已解耦：混淆矩阵等产物由 test() 生成
+    trainer.test(report_results=False)
     # 断言：指标键名对齐新版 Metrics
     assert 'oa' in trainer.val_metrics_result, trainer.val_metrics_result.keys()
     assert f'recall_{2}' in trainer.val_metrics_result
@@ -62,6 +65,50 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
     print(f"case [{name}] OK, scheduler={type(trainer.scheduler).__name__ if trainer.scheduler else None}")
 
 
+def run_tb_case():
+    """TensorBoard 集成：验证标量/逐类指标/batch 级 loss/结构图/超参均写入 event 文件。"""
+    print("\n===== case: tensorboard integration =====")
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    model = nn.Sequential(nn.Flatten(), nn.Linear(3 * 8 * 8, 3))
+    trainer = BaseTrainer(
+        model=model,
+        train_dataloader=make_loader(),
+        val_dataloader=make_loader(32),
+        num_classes=3,
+        epochs=2,
+        eval_interval=1,
+        log_interval=1,  # 每个 batch 都写 batch 级标量，便于断言点数
+        optimizer_cfg={'type': 'adamw', 'lr': 1e-3},
+        scheduler_cfg={'type': 'steplr', 'step_size': 1, 'gamma': 0.5},
+        device='cpu',
+        output_dir=str(OUT_DIR),
+        class_names=['cat', 'dog', 'bird'],
+        # use_tensorboard 默认 True：writer 由 init_settings 创建，fit 结束时关闭
+    )
+    tb_dir = trainer.save_dir / 'tensorboard'
+    assert trainer.writer is not None and tb_dir.exists(), "writer not created in init_settings"
+    trainer.fit()
+
+    ea = EventAccumulator(str(tb_dir))
+    ea.Reload()
+    tags = set(ea.Tags()['scalars'])
+    # epoch 级标量 + Metrics.compute() 全量指标 + 逐类分组 + batch 级 loss
+    expected = {'train/epoch_loss', 'train/learning_rate', 'train/batch_loss',
+                'train/batch_lr', 'val/epoch_loss', 'val/epoch_acc',
+                'val/oa', 'val/miou', 'val/mf1', 'val_per_class/iou/cat',
+                'val_per_class/f1/bird'}
+    missing = expected - tags
+    assert not missing, f"missing scalar tags: {missing}"
+    # batch 级 loss 横轴为 global_step（2 epoch × 4 batch = 8 个点）
+    assert len(ea.Scalars('train/batch_loss')) == 8, len(ea.Scalars('train/batch_loss'))
+    # 模型结构图已写入
+    assert ea.Graph() is not None
+    # 超参对照表已写入（add_hparams 的指标会作为标量出现）
+    assert f'hparam/best_{trainer.monitor}' in tags, tags
+    print("case [tensorboard integration] OK")
+
+
 if __name__ == '__main__':
     run_case('adamw + steplr',
              {'type': 'adamw', 'lr': 1e-3},
@@ -84,6 +131,7 @@ if __name__ == '__main__':
              {'type': 'sgd', 'lr': 1e-2, 'momentum': 0.9},
              {'type': 'reducelronplateau', 'patience': 2},
              epochs=3, eval_interval=2)
+    run_tb_case()
 
     shutil.rmtree(OUT_DIR, ignore_errors=True)
     print('\nAll smoke tests passed!')

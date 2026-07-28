@@ -96,8 +96,6 @@ class DeepLabV3Plus(nn.Module):
 
         # 提取特征
         features = self.backbone(x)
-        # for name, feature in features.items():
-        #     print(f'{name}: {feature.shape}')
         low_level_features = features['block2']   # 1/4 分辨率
         high_level_features = features['block4']  # 1/16 分辨率
 

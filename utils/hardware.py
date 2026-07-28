@@ -148,8 +148,6 @@ def cuda_Performance():
     y = x @ x
     print(f"计算测试通过! 结果形状: {y.shape}")
 
-
-
     device = torch.device('cuda')
     size = 10000
 

@@ -272,19 +272,18 @@ def _vgg(cfg: str,
             _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
     model = VGG(_make_layers(cfgs[cfg], batch_norm=batch_norm), **kwargs)
     if weights:
-        model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True), strict=False)
+        # strict=False 允许丢弃预训练权重中的无关 key，但本模型的 key 必须全部命中，避免静默加载失败
+        missing_keys, _ = model.load_state_dict(weights.get_state_dict(progress=progress, check_hash=True), strict=False)
+        assert not missing_keys, f"Missing keys when loading pretrained weights: {missing_keys}"
     return model
 
 
 
 def build_vgg(arch:str ='vgg16',
-              cfg:str ='D', 
               weights: Optional[WeightsEnum] = None, 
               progress: bool=True, **kwargs):
-    assert arch in archs, f"Invalid arch: {arch}, supported archs: {archs.keys()}"
-    if cfg not in cfgs:
-        cfg = archs[arch]
-    return _vgg(cfg=cfg, batch_norm=False,  weights=weights, progress=progress, **kwargs)
+    assert arch in archs, f"Invalid arch: {arch}, supported archs: {list(archs.keys())}"
+    return _vgg(cfg=archs[arch], batch_norm=False, weights=weights, progress=progress, **kwargs)
  
 
 

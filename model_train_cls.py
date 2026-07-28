@@ -1,6 +1,6 @@
 import os
-import sys
-import psutil
+# import sys
+# import psutil
 import argparse
 
 import torch
@@ -51,10 +51,10 @@ if __name__ == '__main__':
     
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
-    dm = FashionMNISTDataLoader(root='./data',
+    dm = MNISTDataLoader(root='./data',
                                 download=False,
                                 use_normalize=True,
-                                val_split=0.2,
+                                # val_split=0.2,
                                 batch_size=args.batch_size,
                                 pin_memory=pin_memory,
                                 num_workers=optimal_workers
@@ -83,7 +83,7 @@ if __name__ == '__main__':
     #     "patience": 5,
     #     "factor": 0.5,}
     sched_cfg =  {"type": "warmup_cosine",
-                  "total_epochs": 30, 
+                  "total_epochs": epochs, 
                   "warmup_epochs": 5}
     # scheduler = build_scheduler(optimizer, sched_cfg)
 
@@ -103,6 +103,9 @@ if __name__ == '__main__':
                      optimizer_cfg=optim_cfg,
                      scheduler_cfg=sched_cfg,
                     compile_model=compile_model,
+                    # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
+                    #                        # 日志在 save_dir/tensorboard，查看：
+                    #                        # tensorboard --logdir checkpoints
                     )
     tt.fit()
     # fit/test 已解耦：训练结束后手动调用 test()（内部已恢复 best.pt 权重）

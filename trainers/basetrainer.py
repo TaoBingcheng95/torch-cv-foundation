@@ -1,5 +1,6 @@
 
 import os
+import re
 from pathlib import Path
 import time
 from datetime import datetime
@@ -70,7 +71,7 @@ class BaseTrainer:
                  monitor: str = 'loss',  # 统一监控指标：best.pt / 早停 / Plateau 共用
                  monitor_mode: str = 'auto',  # 'auto' | 'min' | 'max'
                  output_dir: str='./output',
-                 tensorboard_writer: Optional[Any] = None,):  # **kwargs     
+                 use_tensorboard: bool = True,):  # **kwargs     
         """
         初始化训练器
         
@@ -87,6 +88,9 @@ class BaseTrainer:
             可选 'loss'、'acc'，或 Metrics.compute() 结果中的任意键（如 'oa'、'miou'）
         :param monitor_mode: 'auto' 按名称推断（名称含 'loss' → min，其余 → max），
             也可显式指定 'min' / 'max'
+        :param use_tensorboard: 是否启用 TensorBoard 标准日志。writer 在
+            init_settings 中创建（写入 save_dir/tensorboard），生命周期由
+            trainer 全程管理，fit() 结束时自动关闭
         :param use_amp: 是否启用混合精度训练。按设备自适应：
             - CUDA: float16 autocast + GradScaler（损失缩放防梯度下溢）
             - CPU : bfloat16 autocast（无需缩放）
@@ -127,7 +131,8 @@ class BaseTrainer:
                 f"monitor_mode must be 'auto'/'min'/'max', got '{monitor_mode}'")
         # 历史最佳监控值（断点续训时由 load_model 恢复，避免 best.pt 被更差模型覆盖）
         self.best_metric = float('inf') if self.monitor_mode == 'min' else float('-inf')
-        # self.global_step = 0
+        # 全局步数（batch 级 TensorBoard 曲线的横轴，断点续训时在 fit 中推算衔接）
+        self.global_step = 0
         self.log_interval = log_interval
         self.eval_interval = max(1, eval_interval)
         self.is_classification = is_classification
@@ -162,8 +167,10 @@ class BaseTrainer:
         # 进度条开关（DDP 非主进程置 True 避免多进程进度条交错刷屏）
         self.pbar_disable = False
 
-        # TensorBoard writer（可选）
-        self.writer = tensorboard_writer
+        # TensorBoard writer（标准日志开关；writer 在 init_settings 中创建，
+        # 因 save_dir 需先建目录；DDP 非主进程不走 init_settings，天然不创建）
+        self.use_tensorboard = use_tensorboard
+        self.writer = None
 
         # 可视化器：只持有展示配置（输出目录/类别名），训练数据由调用时显式传入
         self.visualizer = TrainingVisualizer(
@@ -198,6 +205,13 @@ class BaseTrainer:
 
         # 训练历史记录器（JSONL 逐条追加 + flush，崩溃安全；
         self.history = History(self.save_dir / 'training_log.jsonl')
+
+        # TensorBoard writer（标准日志，与 checkpoint 同目录便于归档对比；
+        # 查看：tensorboard --logdir <output_dir>，各时间戳子目录自动识别为 run）
+        if self.use_tensorboard:
+            tb_dir = self.save_dir / 'tensorboard'
+            self.writer = SummaryWriter(log_dir=str(tb_dir))
+            self.logger.info(f"📈 TensorBoard logging to: {tb_dir}")
 
         self.logger.info(f"🤖 Setting up device: {self.device}")
 
@@ -348,6 +362,111 @@ class BaseTrainer:
         return self.optimizer.param_groups[0]['lr']
 
 
+    # ==================== SummaryWriter 标准日志接口层 ====================
+    # 两套日志分工：自定义日志（logger / History JSONL / visualizer）面向
+    # 实验过程中的快速查看；以下方法统一收拢 SummaryWriter 调用，按业内
+    # 标准工具的形式记录（标量曲线 / 模型结构 / 超参对比）。
+    # 后续迁移 wandb / mlflow 等工具时，只需替换这一层实现，
+    # 训练主流程（fit / train_epoch / evaluate_epoch）无需改动。
+
+    def log_scalars(self,
+                    scalars: Dict[str, Any],
+                    step: int,
+                    prefix: str = '') -> None:
+        """
+        批量记录标量曲线。writer 未启用时静默跳过；非数值项自动忽略。
+
+        Args:
+            scalars: 标量字典，如 {'epoch_loss': 0.5, 'learning_rate': 1e-3}
+            step: 横轴步数（epoch 级传 current_epoch，batch 级传 global_step）
+            prefix: 标签前缀（如 'train/'、'val/'，用于面板分组）
+        """
+        if self.writer is None:
+            return
+        for name, value in scalars.items():
+            # bool 是 int 子类但无曲线意义；time 等非数值项直接跳过
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            self.writer.add_scalar(f'{prefix}{name}', value, step)
+
+
+    def log_val_metrics(self, results: Dict[str, float], step: int) -> None:
+        """
+        记录 Metrics.compute() 的全部验证指标。
+
+        汇总指标（oa/mpa/miou/fwiou/mf1 等）写入 'val/'；
+        逐类指标（iou_0/precision_1 等）按类别名分组写入 'val_per_class/'，
+        避免类别较多时污染主面板。
+        """
+        if self.writer is None:
+            return
+        summary, per_class = {}, {}
+        for key, value in results.items():
+            m = re.match(r'^(.+)_(\d+)$', key)
+            if m and int(m.group(2)) < self.num_classes:
+                base, idx = m.group(1), int(m.group(2))
+                per_class[f'{base}/{self.class_names[idx]}'] = value
+            else:
+                summary[key] = value
+        self.log_scalars(summary, step, 'val/')
+        self.log_scalars(per_class, step, 'val_per_class/')
+
+
+    def log_graph(self) -> None:
+        """
+        记录模型结构图（训练开始时调用一次；失败仅告警不阻断训练）。
+
+        add_graph 基于 trace，部分动态控制流模型 / 特殊设备可能失败，
+        因此包在 try 中；trace 对象用 _unwrap_model 避开 torch.compile 包装层。
+        """
+        if self.writer is None or self.train_loader is None:
+            return
+        try:
+            sample, _ = next(iter(self.train_loader))
+            self.writer.add_graph(self._unwrap_model(), sample.to(self.device))
+            self.logger.info("📈 Model graph logged to TensorBoard")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Failed to log model graph: {e}")
+
+
+    def log_hparams(self, metrics: Dict[str, float]) -> None:
+        """
+        记录超参数与最终指标的对照表（训练结束时调用一次，
+        供 TensorBoard HPARAMS 面板跨实验对比）。
+
+        Args:
+            metrics: 最终指标字典，键名建议带 'hparam/' 前缀（业内惯例，
+                     与普通标量曲线区分）
+        """
+        if self.writer is None:
+            return
+        # 基础超参（add_hparams 仅支持 int/float/str/bool，其余类型转 str）
+        hparams: Dict[str, Any] = {
+            'model': type(self._unwrap_model()).__name__,
+            'criterion': type(self.criterion).__name__,
+            'epochs': self.epochs,
+            'use_amp': self.use_amp,
+            'monitor': self.monitor,
+        }
+        batch_size = getattr(self.train_loader, 'batch_size', None)
+        if batch_size is not None:
+            hparams['batch_size'] = batch_size
+        if self.max_grad_norm is not None:
+            hparams['max_grad_norm'] = self.max_grad_norm
+        # 展平优化器/调度器配置（嵌套字典不被 add_hparams 支持）
+        for cfg_name, cfg in (('optim', self.optimizer_cfg),
+                              ('sched', self.scheduler_cfg)):
+            for k, v in (cfg or {}).items():
+                hparams[f'{cfg_name}/{k}'] = (
+                    v if isinstance(v, (int, float, str, bool)) else str(v))
+        try:
+            # run_name='.' 写入当前 run 目录，避免产生额外的时间戳子 run
+            self.writer.add_hparams(hparams, metrics, run_name='.')
+            self.logger.info("📈 Hparams logged to TensorBoard")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Failed to log hparams: {e}")
+
+
     def fit(self) -> None:
         """
         执行完整训练流程。
@@ -416,11 +535,17 @@ class BaseTrainer:
                 f"🔄 Resuming training from epoch {self.start_epoch + 1} "
                 f"(best {self.monitor} so far: {self.best_metric:.4f})"
             )
+            # batch 级曲线横轴衔接（按已完成 epoch 数推算，避免续训后曲线重叠）
+            if self.train_loader is not None:
+                self.global_step = self.start_epoch * len(self.train_loader)
         if self.start_epoch >= self.epochs:
             self.logger.warning(
                 f"⚠️ start_epoch ({self.start_epoch}) >= epochs ({self.epochs}), "
                 f"skipping training loop"
             )
+
+        # 标准日志：训练开始时记录一次模型结构图
+        self.log_graph()
 
         for epoch in range(self.start_epoch, self.epochs):
 
@@ -552,9 +677,22 @@ class BaseTrainer:
                 save_path=os.path.join(self.save_dir, 'lr_curve.png'),
             )
 
-        # 刷新 TensorBoard 缓冲（writer 由外部创建传入，关闭责任在调用方）
+        # 标准日志：超参 + 最终指标对照表（供 HPARAMS 面板跨实验对比；
+        # 'hparam/' 前缀为业内惯例，与普通标量曲线区分）
+        final_metrics = {}
+        if self.best_metric not in (float('inf'), float('-inf')):
+            final_metrics[f'hparam/best_{self.monitor}'] = self.best_metric
+        if self.val_loss_all:
+            final_metrics['hparam/final_val_loss'] = self.val_loss_all[-1]
+        if self.val_acc_all:
+            final_metrics['hparam/final_val_acc'] = self.val_acc_all[-1]
+        if final_metrics:
+            self.log_hparams(final_metrics)
+
+        # 关闭 TensorBoard writer（由 init_settings 创建，生命周期随训练结束；
+        # torch 的 SummaryWriter 关闭后再写入会自动重建 file writer，重复 fit 亦安全）
         if self.writer is not None:
-            self.writer.flush()
+            self.writer.close()
 
         # 关闭历史记录文件句柄（已逐条 flush，此处仅显式释放资源）
         self.history.close()
@@ -608,7 +746,7 @@ class BaseTrainer:
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                # self.global_step += 1
+                self.global_step += 1
 
                 # ✅ OneCycleLR 需要在 batch 后调用 step()
                 if self.scheduler is not None and self.is_batch_scheduler:
@@ -620,13 +758,18 @@ class BaseTrainer:
                 total_loss += loss.detach() * batch_size  # 加权累加
                 total_samples += batch_size
 
-                # 批次级日志（每 log_interval 个 batch 更新一次进度条）
+                # 批次级日志（每 log_interval 个 batch：进度条 + batch 级标准日志，
+                # 共用一次 .item() 同步；低频写入也避免 event 文件过大）
                 if batch_idx % self.log_interval == 0:
+                    batch_loss = loss.item()
                     current_lr = self.optimizer.param_groups[0]['lr']
                     pbar.set_postfix({
-                        'loss': f'{loss.item():.4f}',
+                        'loss': f'{batch_loss:.4f}',
                         'lr': f'{current_lr:.2e}'
                     })
+                    self.log_scalars(
+                        {'batch_loss': batch_loss, 'batch_lr': current_lr},
+                        self.global_step, 'train/')
             except RuntimeError as e:
                 # 异常处理：跳过问题 batch，记录日志
                 if "out of memory" in str(e):
@@ -648,12 +791,13 @@ class BaseTrainer:
         current_lr = self.optimizer.param_groups[0]['lr']
         epoch_time = time.time() - start_time
         samples_per_sec = total_samples / epoch_time
-        # 记录到 TensorBoard（如果启用）
-        if self.writer is not None:
-            self.writer.add_scalar("train/epoch_loss", avg_loss, self.current_epoch)
-            self.writer.add_scalar("train/learning_rate", current_lr, self.current_epoch)
-            self.writer.add_scalar("train/samples_per_sec", samples_per_sec, self.current_epoch)
-            
+        # 标准日志（epoch 级）
+        self.log_scalars({
+            'epoch_loss': avg_loss,
+            'learning_rate': current_lr,
+            'samples_per_sec': samples_per_sec,
+        }, self.current_epoch, 'train/')
+
         self.train_loss_all.append(avg_loss)
 
         # 日志
@@ -752,11 +896,13 @@ class BaseTrainer:
         val_time = time.time() - start_time
         samples_per_sec = total_samples / val_time
 
-        # TensorBoard 记录（如果启用）
-        if self.writer is not None:
-            self.writer.add_scalar("val/epoch_loss", avg_loss, self.current_epoch)
-            self.writer.add_scalar("val/epoch_acc", val_acc, self.current_epoch)
-            self.writer.add_scalar("val/samples_per_sec", samples_per_sec, self.current_epoch)
+        # 标准日志：Metrics.compute() 全量指标（含逐类分组）+ 损失/吞吐
+        self.log_val_metrics(results, self.current_epoch)
+        self.log_scalars({
+            'epoch_loss': avg_loss,
+            'epoch_acc': val_acc,
+            'samples_per_sec': samples_per_sec,
+        }, self.current_epoch, 'val/')
         
         # 更新历史列表（val_epochs 记录对应轮次，eval_interval > 1 时绘图对齐用）
         self.val_loss_all.append(avg_loss)

@@ -528,10 +528,11 @@ def _resnet(
 
 
 
-def build_resnet(arch:str ='resnet50', cfg:str ='resnet50', 
+def build_resnet(arch:str ='resnet50', 
                  weights: Optional[WeightsEnum] = None, 
                  progress: bool=True, **kwargs):
-    block, layers = cfgs.get(cfg, 'resnet50')
+    assert arch in cfgs, f"Invalid arch: {arch}, supported archs: {list(cfgs.keys())}"
+    block, layers = cfgs[arch]
     return _resnet(block, layers, weights=weights, progress=progress, **kwargs)
 
 

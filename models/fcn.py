@@ -127,7 +127,7 @@ class FCN32s(nn.Module):
 
 
     def forward(self, x):
-        input_size = x.size()[2:]
+        # input_size = x.size()[2:]
         pool5 = self.backbone(x)
 
         h = self.relu6(self.fc6(pool5))
@@ -136,7 +136,7 @@ class FCN32s(nn.Module):
         h = self.drop7(h)
         h = self.score_fr(h)
 
-        out = self.upsample32(x)
+        out = self.upsample32(h)
         # or 直接使用 F.interpolate 上采样 32 倍
         # out = F.interpolate(h, size=input_size, mode='bilinear', align_corners=False)
 

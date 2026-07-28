@@ -1,4 +1,4 @@
 
-from .loss import BCEWithLogitsLoss, CEWithLogitsLoss
+from .loss import BCEWithLogitsLoss, CEWithLogitsLoss, DiceLoss, CEDiceLoss
 
-__all__ = ('BCEWithLogitsLoss', 'CEWithLogitsLoss')
+__all__ = ('BCEWithLogitsLoss', 'CEWithLogitsLoss', 'DiceLoss', 'CEDiceLoss')

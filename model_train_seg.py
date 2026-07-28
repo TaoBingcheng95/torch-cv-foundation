@@ -1,111 +1,112 @@
-# from functools import partial
-# transforms=partial(ImageClassification, crop_size=224),
-import os
-import sys
-from pprint import pprint
-import numpy as np
-from torch.utils.data import DataLoader, random_split
-import segmentation_models_pytorch as smp
-import matplotlib.pyplot as plt
+import argparse
 
-from dataset.components.custom_ds import TianchiDataset, NAIPDataset, JiageDataset, WHDLDDataset
+import torch
+
+from dataset import auto_pin_memory, get_smart_num_workers
+from dataset import VOC2012ClassSegLoader
+from models.deeplab3plus import DeepLabV3Plus
+from models.backbone import ResNet18Encoder
 from trainers import BaseTrainer
+from utils.hardware import select_device
+from loss import CEDiceLoss
+
+torch.set_float32_matmul_precision('medium')
+# os.environ['TORCHDYNAMO_VERBOSE'] = '1'
+
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='PyTorch Training Script')
+    parser.add_argument('--device', default='auto', help='Device to use (auto/cpu/cuda/mps)')
+    parser.add_argument('--output_dir', default='checkpoints', help='Output directory for checkpoints')
+    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs to train')
+    parser.add_argument('--batch_size', default=16, type=int, help='Batch size for training')
+    parser.add_argument('--learning_rate', default=2e-4, type=float, help='Learning rate for optimizer')
+    parser.add_argument('--resume', default='', help='Path to the checkpoint to resume from')
+    parser.add_argument('--compile', action='store_true', help='Compile model for faster training')
+    return parser.parse_args()
+
 
 
 
 if __name__ == '__main__':
 
-    Tianchi_dir = "/data/tbc/segmentation/tianchi" #'D:\\myspace\\dataset\\segemnt\\tianchi' # 
-    WHDLD_dir = '/data/tbc/segmentation/WHDLD'
-    NAIP_dir = '/data/tbc/segmentation/naip'
-    # jiage_dir = '/data/tbc/segmentation/jiage_building/'
+    args = parse_args()
 
-    val_ratio = 0.4
-    test_ratio = 0.2
+    device = select_device(args.device)
+    print(f"Using device: {device}")
+    if device.type == 'cuda':
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
     
-    batch_size = 8
-    if sys.platform.startswith('win'):
-        num_workers = 0
-    else:
-        num_workers = 4
-    ds = TianchiDataset(root=Tianchi_dir)
-    # ds = WHDLDDataset(root=WHDLD_dir)
-    # ds = JiageDataset(jiage_dir)
-    # ds = NAIPDataset(NAIP_dir)
-    data_count = len(ds)
-    val_count = int(data_count * val_ratio)
-    test_count = int(data_count * test_ratio)
-    num_classes = ds.num_classes # naip=7 whdld=6
+    output_dir=args.output_dir
+    epochs = args.epochs
+    learning_rate = args.learning_rate
 
-    train_ds, val_ds, test_ds = random_split(ds, [data_count - val_count - test_count, val_count, test_count])
-    # train_ds.dataset.transform = train_transform
-    train_dl = DataLoader(train_ds,
-                          batch_size=batch_size,
-                          shuffle=False,
-                          num_workers=num_workers,
-                          drop_last=True,
-                          pin_memory=True)
-    val_dl = DataLoader(val_ds,
-                        batch_size=batch_size,
-                        shuffle=False,
-                        num_workers=num_workers,
-                        drop_last=True,
-                        pin_memory=True)
-    test_dl = DataLoader(test_ds,
-                         batch_size=batch_size,
-                         shuffle=False,
-                         num_workers=num_workers,
-                         drop_last=True,
-                         pin_memory=True)
+    optimal_workers = get_smart_num_workers()
+    pin_memory = auto_pin_memory(device, num_workers=optimal_workers)
 
-    # model = smp.Unet('resnet34', classes=num_classes, activation='softmax')
-    model = smp.Unet(
-        encoder_name="resnet34",  # choose encoder, e.g. mobilenet_v2 or efficientnet-b7
-        encoder_weights="imagenet",  # use `imagenet` pre-trained weights for encoder initialization
-        in_channels=3,  # model input channels (1 for gray-scale images, 3 for RGB, etc.)
-        classes=num_classes,  # model output channels (number of classes in your dataset)
+    dm = VOC2012ClassSegLoader(root='./data',
+                                batch_size=args.batch_size,
+                                pin_memory=pin_memory,
+                                num_workers=optimal_workers
+                                )
+    train_dl = dm.train_dataloader() 
+    val_dl = dm.val_dataloader()
+    test_dl = dm.test_dataloader()
+    num_classes = dm.num_classes
+
+    # DeepLabV3+：backbone → ASPP (neck) → decoder，本仓库自建模块化实现；
+    # encoder 加载 ImageNet 预训练权重，与 loader 的 ImageNet 归一化一致；
+    # 换 ResNet50Encoder 只需改这一行（通道数由 backbone.out_channels 自动适配）
+    model = DeepLabV3Plus(
+        backbone=ResNet18Encoder(weights=True),
+        num_classes=num_classes,
     )
-    # model = UNet(in_channels=3, out_channels=num_classes, use_attention=False)
 
-    # 优化器/调度器以配置字典传入，由 optimizers.builder 统一构建
-    optimizer_cfg = {'type': 'sgd', 'lr': 1e-2, 'momentum': 0.9}
-    scheduler_cfg = {'type': 'reducelronplateau', 'mode': 'min', 'patience': 10, 'factor': 0.1}
+    # CE + Dice 组合损失：CE 保证逐像素稳定收敛，Dice 直接优化区域重叠（与 miou 监控指标对齐）；
+    # ignore_index=255 忽略 VOC 的 void 边界像素
+    criterion = CEDiceLoss(ce_weight=1.0, dice_weight=1.0)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, factor=0.1)
+    optim_cfg = {
+        "type": "adamw",
+        "lr": learning_rate, # 5e-4,
+        "weight_decay": 1e-4,
+        "betas": (0.9, 0.999),}
+    # optimizer = build_optimizer(model, optim_cfg)
+    # sched_cfg = {
+    #     "type": "reduceLROnPlateau",
+    #     "mode": "min",  # 与 BaseTrainer 默认 monitor='acc'（max 方向）对齐
+    #     "patience": 5,
+    #     "factor": 0.5,}
+    sched_cfg =  {"type": "warmup_cosine",
+                  "total_epochs": epochs, 
+                  "warmup_epochs": 5}
+    # scheduler = build_scheduler(optimizer, sched_cfg)
 
-    resume='checkpoints/20241030_124551_Tianchi/epoch_20_acc_0.9301_miou_0.8694.pth'
+    # compile model for faster training with pytorch 2.0
+    compile_model= args.compile
+
     tt = BaseTrainer(model=model,
-                     device='cuda:0',
+                     device=device,
+                     output_dir=output_dir,
+                     epochs=epochs,
+                     num_classes=num_classes,
                      train_dataloader=train_dl,
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
-                     resume=resume,
-                     num_classes=num_classes,
-                     epochs=20,
-                     optimizer_cfg=optimizer_cfg,
-                     scheduler_cfg=scheduler_cfg,
-                     is_classification=False,  # 分割任务：指标忽略 255，报告额外输出 mIoU/FWIoU
-                     compile_model=False  # compile model for faster training with pytorch 2.0
+                     criterion=criterion,
+                     optimizer_cfg=optim_cfg,
+                     scheduler_cfg=sched_cfg,
+                     compile_model=compile_model,
+                     is_classification=False,
+                     monitor='miou',
+                     eval_interval=1,
+                     class_names=dm.classes,
+                     # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
+                     #                        # 日志在 save_dir/tensorboard，查看：
+                     #                        # tensorboard --logdir checkpoints
                      )
-    print(tt.save_dir)
-    # tt.fit()
-    
-    # perdict
-    x, y = next(iter(test_dl))
-    preds = tt.predict(x)
-    # print(x.shape, y.shape)
-    # print(preds.shape)
-    # print(np.unique(y[0,:,:]))
-    # print(np.unique(pred.cpu().numpy()[0,:,:]))
-
-    # metrics = Metrics(num_classes,'cuda:0')
-    # # 初始化混淆矩阵
-    # cnf_matrix = np.zeros((num_classes, num_classes))
-    # metrics.sample_add(y.to('cuda:0'), preds.to('cuda:0'))
-    # results = metrics.compute()
-    # pprint(results)
-
-    fig, axis = plt.subplots(1,3)
-    axis[0].imshow(x[0,:,:,:].permute(1,2,0).numpy().astype(np.uint8))
-    axis[1].imshow(y[0,:,:])
-    axis[2].imshow(preds.cpu().numpy()[0,:,:])
-    plt.tight_layout()
-    plt.savefig(os.path.join(tt.save_dir,'prediction.png'))
+    tt.fit()
+    # fit/test 已解耦：训练结束后手动调用 test()（内部已恢复 best.pt 权重）
+    tt.test(report_results=True)

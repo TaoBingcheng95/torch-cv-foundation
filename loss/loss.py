@@ -1,8 +1,10 @@
 
-from typing import Optional
+from typing import List, Optional
 import torch
 import torch.nn as nn
+import torch.linalg as LA
 import torch.nn.functional as F
+from torch.nn.modules.loss import _Loss
 
 
 
@@ -61,7 +63,7 @@ class BCEWithLogitsLoss(nn.Module):
 
 class CEWithLogitsLoss(nn.Module):
     """
-    Cross Entropy Loss (接受原始 logits，内部执行 Softmax).
+    Cross Entropy Loss (接受原始 logits，内部执行 log_softmax + NLL).
     适用于多分类互斥任务（如语义分割、图像分类）。
     """
     def __init__(self, weight=None, 
@@ -78,3 +80,228 @@ class CEWithLogitsLoss(nn.Module):
     def forward(self, output, target):
         loss = self.cross_entropy(output, target)
         return loss
+
+
+
+class CEDiceLoss(nn.Module):
+    """
+    CE + Dice 组合损失，语义分割常用搭配：
+    - CE：逐像素分类，梯度稳定、收敛快；
+    - Dice：直接优化区域重叠度（与 mIoU 更对齐），缓解前景/背景类别不均衡。
+    total = ce_weight * CE + dice_weight * Dice
+    """
+    def __init__(
+        self,
+        ce_weight: float = 1.0,
+        dice_weight: float = 1.0,
+        class_weight: Optional[List[float]] = None,
+        ignore_index: int = 255,
+        smooth: float = 0.0,
+    ):
+        """
+        Args:
+            ce_weight: CE 项的权重
+            dice_weight: Dice 项的权重
+            class_weight: 各类别权重（仅作用于 CE 项）
+            ignore_index: 忽略的标签值（VOC 边界为 255）
+            smooth: Dice 的平滑系数
+        """
+        super().__init__()
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+        self.ce = CEWithLogitsLoss(weight=class_weight,
+                                   ignore_index=ignore_index)
+        self.dice = DiceLoss(mode="multiclass",
+                             from_logits=True,
+                             ignore_index=ignore_index,
+                             smooth=smooth)
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Shape:
+            - logits: (N, C, H, W) 原始输出（未过 softmax）
+            - target: (N, H, W) 类别索引标签
+        """
+        return (self.ce_weight * self.ce(logits, target)
+                + self.dice_weight * self.dice(logits, target))
+
+
+
+class DiceLoss(_Loss):
+    BINARY_MODE: str = "binary"
+    MULTICLASS_MODE: str = "multiclass"
+    MULTILABEL_MODE: str = "multilabel"
+    def __init__(
+        self,
+        mode: str,
+        classes: Optional[List[int]] = None,
+        log_loss: bool = False,
+        from_logits: bool = True,
+        smooth: float = 0.0,
+        ignore_index: Optional[int] = None,
+        eps: float = 1e-7,
+    ):
+        """Dice loss for image segmentation task.
+        It supports binary, multiclass and multilabel cases
+
+        Args:
+            mode: Loss mode 'binary', 'multiclass' or 'multilabel'
+            classes:  List of classes that contribute in loss computation. By default, all channels are included.
+            log_loss: If True, loss computed as `- log(dice_coeff)`, otherwise `1 - dice_coeff`
+            from_logits: If True, assumes input is raw logits
+            smooth: Smoothness constant for dice coefficient (a)
+            ignore_index: Label that indicates ignored pixels (does not contribute to loss)
+            eps: A small epsilon for numerical stability to avoid zero division error
+                (denominator will be always greater or equal to eps)
+
+        Shape
+             - **y_pred** - torch.Tensor of shape (N, C, H, W)
+             - **y_true** - torch.Tensor of shape (N, H, W) or (N, C, H, W)
+
+        Reference
+            https://github.com/BloodAxe/pytorch-toolbelt
+        """
+        assert mode in {self.BINARY_MODE, self.MULTILABEL_MODE, self.MULTICLASS_MODE}
+        super(DiceLoss, self).__init__()
+        self.mode = mode
+        if classes is not None:
+            assert mode != self.BINARY_MODE, (
+                "Masking classes is not supported with mode=binary"
+            )
+            classes = torch.tensor(classes, dtype=torch.long)
+
+        self.classes = classes
+        self.from_logits = from_logits
+        self.smooth = smooth
+        self.eps = eps
+        self.log_loss = log_loss
+        self.ignore_index = ignore_index
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        assert y_true.size(0) == y_pred.size(0)
+
+        if self.from_logits:
+            # Apply activations to get [0..1] class probabilities
+            # Using Log-Exp as this gives more numerically stable result and does not cause vanishing gradient on
+            # extreme values 0 and 1
+            if self.mode == self.MULTICLASS_MODE:
+                y_pred = y_pred.log_softmax(dim=1).exp()
+            else:
+                y_pred = F.logsigmoid(y_pred).exp()
+
+        bs = y_true.size(0)
+        num_classes = y_pred.size(1)
+        dims = (0, 2)
+
+        if self.mode == self.BINARY_MODE:
+            y_true = y_true.view(bs, 1, -1)
+            y_pred = y_pred.view(bs, 1, -1)
+
+            if self.ignore_index is not None:
+                mask = y_true != self.ignore_index
+                y_pred = y_pred * mask
+                y_true = y_true * mask
+
+        if self.mode == self.MULTICLASS_MODE:
+            y_true = y_true.view(bs, -1)
+            y_pred = y_pred.view(bs, num_classes, -1)
+
+            if self.ignore_index is not None:
+                mask = y_true != self.ignore_index
+                y_pred = y_pred * mask.unsqueeze(1)
+
+                y_true = F.one_hot(
+                    (y_true * mask).to(torch.long), num_classes
+                )  # N,H*W -> N,H*W, C
+                y_true = y_true.permute(0, 2, 1) * mask.unsqueeze(1)  # N, C, H*W
+            else:
+                y_true = F.one_hot(y_true, num_classes)  # N,H*W -> N,H*W, C
+                y_true = y_true.permute(0, 2, 1)  # N, C, H*W
+
+        if self.mode == self.MULTILABEL_MODE:
+            y_true = y_true.view(bs, num_classes, -1)
+            y_pred = y_pred.view(bs, num_classes, -1)
+
+            if self.ignore_index is not None:
+                mask = y_true != self.ignore_index
+                y_pred = y_pred * mask
+                y_true = y_true * mask
+
+        scores = self.compute_score(
+            y_pred, y_true.type_as(y_pred), smooth=self.smooth, eps=self.eps, dims=dims
+        )
+
+        if self.log_loss:
+            loss = -torch.log(scores.clamp_min(self.eps))
+        else:
+            loss = 1.0 - scores
+
+        # Dice loss is undefined for non-empty classes
+        # So we zero contribution of channel that does not have true pixels
+        # NOTE: A better workaround would be to use loss term `mean(y_pred)`
+        # for this case, however it will be a modified jaccard loss
+
+        mask = y_true.sum(dims) > 0
+        loss *= mask.to(loss.dtype)
+
+        if self.classes is not None:
+            loss = loss[self.classes]
+
+        return self.aggregate_loss(loss)
+
+    def aggregate_loss(self, loss):
+        return loss.mean()
+
+    def compute_score(
+        self, output, target, smooth=0.0, eps=1e-7, dims=None
+    ) -> torch.Tensor:
+        return self.soft_dice_score(output, target, smooth, eps, dims)
+
+    @staticmethod
+    def soft_tversky_score(
+        output: torch.Tensor,
+        target: torch.Tensor,
+        alpha: float,
+        beta: float,
+        smooth: float = 0.0,
+        eps: float = 1e-7,
+        dims=None,) -> torch.Tensor:
+        """Tversky loss
+
+        References:
+            https://arxiv.org/pdf/2302.05666
+            https://arxiv.org/pdf/2303.16296
+
+        """
+        assert output.size() == target.size()
+
+        if dims is not None:
+            output_sum = torch.sum(output, dim=dims)
+            target_sum = torch.sum(target, dim=dims)
+            difference = LA.vector_norm(output - target, ord=1, dim=dims)
+        else:
+            output_sum = torch.sum(output)
+            target_sum = torch.sum(target)
+            difference = LA.vector_norm(output - target, ord=1)
+
+        intersection = (output_sum + target_sum - difference) / 2  # TP
+        fp = output_sum - intersection
+        fn = target_sum - intersection
+
+        tversky_score = (intersection + smooth) / (
+            intersection + alpha * fp + beta * fn + smooth
+        ).clamp_min(eps)
+        return tversky_score
+
+    @staticmethod
+    def soft_dice_score(
+        output: torch.Tensor,
+        target: torch.Tensor,
+        smooth: float = 0.0,
+        eps: float = 1e-7,
+        dims=None) -> torch.Tensor:
+        assert output.size() == target.size()
+        # 静态方法内无 self，通过类名调用同类静态方法；
+        # Dice 即 alpha=beta=0.5 的 Tversky 特例
+        dice_score = DiceLoss.soft_tversky_score(output, target, 0.5, 0.5, smooth, eps, dims)
+        return dice_score

@@ -190,4 +190,5 @@ class MobileNetV3SmallEncoder(nn.Module):
         f3 = self.f3(f2)
         features['block4'] = f3
         f4 = self.f4(f3)
+        features['block5'] = f4
         return features

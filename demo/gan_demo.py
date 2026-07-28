@@ -75,6 +75,8 @@ def train_gan(generator, discriminator, dataloader, num_epochs=50, lr=0.0002):
               f"Generator Loss: {gen_loss.item():.4f}, "
               f"Discriminator Loss: {real_loss.item() + fake_loss.item():.4f}")
 
+
+
 if __name__ == "__main__":
     # 加载MNIST数据集
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
