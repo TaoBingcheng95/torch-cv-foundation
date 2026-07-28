@@ -3,6 +3,7 @@ import platform
 import numpy as np
 import torch
 import torch.nn as nn
+from  torchvision import transforms
 
 # from models.deeplab3plus import DeepLabV3Plus
 # from models.backbone import ResNet18Encoder, VGG16Encoder, MobileNetV2Encoder
@@ -13,15 +14,12 @@ import torch.nn as nn
 
 # from models.convnextv2 import convnextv2_base
 from models import AlexNet
+# from torchvision.datasets import VOCSegmentation
+from dataset import VOC2012ClassSegLoader
 
 
 
 if __name__ == '__main__':
-    from torchinfo import summary
-
-
-    print("platform", platform.platform(),)
-    print("machine", platform.machine())
     
     # 通道数现在由 backbone.out_channels 自动推导，无需手动传入
     # VGG16Encoder()       → low_level=128, high_level=512
@@ -41,4 +39,29 @@ if __name__ == '__main__':
     # block = CNBlock(dim=96, layer_scale = 1e-6, stochastic_depth_prob=0.0) # , out_dim=192, kernel_size=3
     # print(block)
 
+
+    # transform = transforms.Compose([
+    #         transforms.ToTensor()
+    #     ])
+    # dm = VOCSegmentation(root='./data', year="2012",image_set='val', transform=transform, target_transform=transform)
+    # print(len(dm))
+    # x, y = dm[10]
+    # print(x.shape)
+    # print(y.shape)
+    # print(np.unique(y.numpy()))
+
+    dm = VOC2012ClassSegLoader(root='./data',
+                                    batch_size=4,
+                                    )
+    train_dl = dm.train_dataloader()
+    val_dl = dm.val_dataloader()
+    test_dl = dm.test_dataloader()
+
+    x, y = next(iter(train_dl))
+    x = x.numpy()
+    y = y.numpy()
+    print(np.max(x))
+    print(np.min(x))
+    print(np.max(y))
+    print(np.min(y))
 

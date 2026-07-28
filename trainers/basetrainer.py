@@ -729,6 +729,8 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
+                targets = targets.squeeze()
+                targets =targets.long()
 
                 # 前向（AMP 启用时在 autocast 下以低精度计算）+ 反向传播
                 self.optimizer.zero_grad(set_to_none=True) 
@@ -858,6 +860,8 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
+                targets = targets.squeeze()
+                targets =targets.long()
 
                 # 前向推理 + 损失 + 指标累积（见 validation_step；AMP 下同样用 autocast 加速）
                 with autocast(device_type=self.device.type,
@@ -945,6 +949,7 @@ class BaseTrainer:
         """
         logits = self.model(inputs)
         loss = self.criterion(logits, targets)
+
         # Metrics 的混淆矩阵在 CPU 上，先搬运避免 GPU 训练时设备不匹配
         # （logits 传入后由 Metrics.update 自动 argmax）
         self.metrics.update(logits.detach().cpu(), targets.detach().cpu())
@@ -994,6 +999,8 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
+                targets = targets.squeeze()
+                targets =targets.long()
 
                 # 前向推理 + 损失 + 指标累积（与验证共用 validation_step 钩子，
                 # 子类覆写后 test 同步生效）

@@ -444,6 +444,9 @@ class CIFAR10DataLoader:
             loader = self.test_dataloader()
         images, labels = next(iter(loader))
 
+        std = torch.tensor(self.CIFAR10_STD)
+        mean = torch.tensor(self.CIFAR10_MEAN)
+
         # 创建网格图：按实际 batch 大小取列数；squeeze=False 保证 axes 恒为二维数组，
         # 避免 batch_size=1 时返回单个 Axes 导致遍历报错
         ncols = min(images.shape[0], 5)
@@ -453,7 +456,9 @@ class CIFAR10DataLoader:
             img = images[i].permute(1, 2, 0)
             if self.use_normalize:
                 # 反归一化公式：img * std + mean
-                img = img * torch.tensor(self.CIFAR10_STD) + torch.tensor(self.CIFAR10_MEAN)
+                img = img * std + mean
+                # print(torch.max(img))
+                # print(torch.min(img))
                 img = img.clip(0, 1) # 防止数值超出 [0,1] 范围
             ax.imshow(img)
             ax.set_title(self.classes[labels[i]])

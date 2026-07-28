@@ -4,8 +4,9 @@ import torch
 
 from dataset import auto_pin_memory, get_smart_num_workers
 from dataset import VOC2012ClassSegLoader
+from dataset.voc_dataset import VOCSegmentationDataLoader
 from models.deeplab3plus import DeepLabV3Plus
-from models.backbone import ResNet18Encoder
+from models.backbone import ResNet18Encoder, ResNet50Encoder
 from trainers import BaseTrainer
 from utils.hardware import select_device
 from loss import CEDiceLoss
@@ -44,13 +45,14 @@ if __name__ == '__main__':
 
     optimal_workers = get_smart_num_workers()
     pin_memory = auto_pin_memory(device, num_workers=optimal_workers)
+    print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
-    dm = VOC2012ClassSegLoader(root='./data',
+    dm = VOCSegmentationDataLoader(root='./data',
                                 batch_size=args.batch_size,
                                 pin_memory=pin_memory,
                                 num_workers=optimal_workers
                                 )
-    train_dl = dm.train_dataloader() 
+    train_dl = dm.train_dataloader()
     val_dl = dm.val_dataloader()
     test_dl = dm.test_dataloader()
     num_classes = dm.num_classes
@@ -59,7 +61,7 @@ if __name__ == '__main__':
     # encoder 加载 ImageNet 预训练权重，与 loader 的 ImageNet 归一化一致；
     # 换 ResNet50Encoder 只需改这一行（通道数由 backbone.out_channels 自动适配）
     model = DeepLabV3Plus(
-        backbone=ResNet18Encoder(weights=True),
+        backbone=ResNet50Encoder(weights=True),
         num_classes=num_classes,
     )
 
@@ -110,3 +112,4 @@ if __name__ == '__main__':
     tt.fit()
     # fit/test 已解耦：训练结束后手动调用 test()（内部已恢复 best.pt 权重）
     tt.test(report_results=True)
+    
