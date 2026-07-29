@@ -41,8 +41,10 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
     trainer.fit()
     # fit/test 已解耦：混淆矩阵等产物由 test() 生成
     trainer.test(report_results=False)
-    # 断言：指标键名对齐新版 Metrics
-    assert 'oa' in trainer.val_metrics_result, trainer.val_metrics_result.keys()
+    # 断言：指标键名对齐 ClassificationMetric（分类任务不再输出 oa/miou）
+    assert 'acc' in trainer.val_metrics_result, trainer.val_metrics_result.keys()
+    assert 'macro_f1' in trainer.val_metrics_result
+    assert 'oa' not in trainer.val_metrics_result
     assert f'recall_{2}' in trainer.val_metrics_result
     # 断言：训练历史与 lr 记录正常（训练阶段只记损失，不算指标）
     assert len(trainer.train_loss_all) <= epochs and len(trainer.train_loss_all) == len(trainer.lr_history)
@@ -93,11 +95,11 @@ def run_tb_case():
     ea = EventAccumulator(str(tb_dir))
     ea.Reload()
     tags = set(ea.Tags()['scalars'])
-    # epoch 级标量 + Metrics.compute() 全量指标 + 逐类分组 + batch 级 loss
+    # epoch 级标量 + metrics.compute() 全量指标 + 逐类分组 + batch 级 loss
     expected = {'train/epoch_loss', 'train/learning_rate', 'train/batch_loss',
                 'train/batch_lr', 'val/epoch_loss', 'val/epoch_acc',
-                'val/oa', 'val/miou', 'val/mf1', 'val_per_class/iou/cat',
-                'val_per_class/f1/bird'}
+                'val/acc', 'val/macro_f1', 'val/kappa',
+                'val_per_class/recall/cat', 'val_per_class/f1/bird'}
     missing = expected - tags
     assert not missing, f"missing scalar tags: {missing}"
     # batch 级 loss 横轴为 global_step（2 epoch × 4 batch = 8 个点）

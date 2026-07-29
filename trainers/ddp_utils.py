@@ -47,16 +47,20 @@ class _NoopVisualizer:
 
 class _DistributedMetrics:
     """
-    分布式指标包装器：compute() 前先 all_reduce 混淆矩阵，
+    分布式指标包装器：compute() 前先做跨 rank 汇总，
     使所有 rank 得到完全一致的全局指标（集合通信保证各 rank 结果相同，
     因此 best.pt 保存/早停决策在各 rank 间天然同步，无需额外广播）。
+
+    优先调用被包装器自身的 all_reduce()（新版指标类均提供，
+    可同步混淆矩阵之外的状态，如 ClassificationMetric 的 Top-k 计数）；
+    仅暴露 confusion_matrix 的自定义指标回退到矩阵 reduce。
 
     注意：compute() 包含集合通信，所有 rank 必须同步调用相同次数。
     """
 
     def __init__(self, metrics):
         self.metrics = metrics
-        self._synced = False  # 防止同一轮重复 compute 时混淆矩阵被叠加多次
+        self._synced = False  # 防止同一轮重复 compute 时状态被叠加多次
 
     def reset(self) -> None:
         self._synced = False
@@ -72,8 +76,11 @@ class _DistributedMetrics:
 
     def compute(self) -> Dict[str, float]:
         if not self._synced and get_world_size() > 1:
-            global_cm = reduce_value(self.metrics.confusion_matrix, average=False)
-            self.metrics.confusion_matrix.copy_(global_cm)
+            if hasattr(self.metrics, 'all_reduce'):
+                self.metrics.all_reduce()
+            else:
+                global_cm = reduce_value(self.metrics.confusion_matrix, average=False)
+                self.metrics.confusion_matrix.copy_(global_cm)
             self._synced = True
         return self.metrics.compute()
 

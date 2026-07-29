@@ -7,13 +7,14 @@ import torchvision.transforms as transforms
 from torchvision.datasets import VOCSegmentation, VOCDetection
 
 
+# (21, 3)
 VOC_COLORMAP = np.array([
     [0, 0, 0],       [128, 0, 0],   [0, 128, 0],   [128, 128, 0],
     [0, 0, 128],     [128, 0, 128], [0, 128, 128], [128, 128, 128],
     [64, 0, 0],      [192, 0, 0],   [64, 128, 0],  [192, 128, 0],
     [64, 0, 128],    [192, 0, 128], [64, 128, 128],[192, 128, 128],
     [0, 64, 0],      [128, 64, 0],  [0, 192, 0],   [128, 192, 0],
-    [0, 64, 128] ], dtype=np.uint8)  # (21, 3)
+    [0, 64, 128] ], dtype=np.uint8)  
 
 
 VOC_CLASSES = (
@@ -98,6 +99,7 @@ class VOCSegmentationDataLoader:
     def __init__(self, 
                  root: str='./data',
                  download: bool = False,
+                 mix_up:bool = False,
                  # 验证集划分：float ∈ (0,1) 按比例从训练集切分，int ≥ 1 按绝对数量切分；
                  # 官方 test 集保持不动，保证指标与外部基准可比
                  val_split: Union[int, float] = 0.1,
@@ -135,23 +137,27 @@ class VOCSegmentationDataLoader:
             transforms.Resize((self.RESIZE_SIZE,self.RESIZE_SIZE)),
             transforms.PILToTensor()
         ])
-
-        self.data_test = VOCSegmentation(
-            root=root,
-            year = '2012',
-            image_set='val',
-            download=download,
-            transform=self.transform_img,
-            target_transform=self.transform_target
-        )
-        self.full_data_train = VOCSegmentation(
-            root=root, 
-            year = '2012',
-            image_set='train',
-            download=download,
-            transform=self.transform_img,
-            target_transform=self.transform_target
-        )
+        
+        if mix_up:
+            # 混合 VOC2007 和 VOC2012 的训练集， 后续开发。
+            pass
+        else:
+            self.data_test = VOCSegmentation(
+                root=root,
+                year = '2012',
+                image_set='val',
+                download=download,
+                transform=self.transform_img,
+                target_transform=self.transform_target
+            )
+            self.full_data_train = VOCSegmentation(
+                root=root, 
+                year = '2012',
+                image_set='train',
+                download=download,
+                transform=self.transform_img,
+                target_transform=self.transform_target
+            )
 
         # random_split 返回的是 Subset 对象，它们会自动继承 full_train_set 的 transform
         if val_split > 0:
@@ -173,6 +179,7 @@ class VOCSegmentationDataLoader:
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size,
+            drop_last=True,
             shuffle=True,                      # 训练集必须 shuffle
             num_workers=self.num_workers,      # 初学者建议设为 0，避免 Windows 多进程报错
             pin_memory=self.pin_memory,
@@ -186,6 +193,7 @@ class VOCSegmentationDataLoader:
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size,
+            drop_last=False,
             shuffle=False,      # 验证集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
@@ -197,6 +205,7 @@ class VOCSegmentationDataLoader:
         return DataLoader(
             dataset=self.data_test, 
             batch_size=self.batch_size, 
+            drop_last=False,
             shuffle=False,      # 测试集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,

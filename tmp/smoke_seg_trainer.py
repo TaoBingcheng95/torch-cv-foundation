@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from dataset import VOC2012ClassSegLoader
+from dataset.voc_dataset import VOCSegmentationDataLoader
 from models.deeplab3plus import DeepLabV3Plus
 from models.backbone import ResNet18Encoder
 from trainers import BaseTrainer
@@ -24,13 +24,13 @@ if __name__ == '__main__':
     device = select_device('auto')
     print(f"Using device: {device}")
 
-    dm = VOC2012ClassSegLoader(root='./data', batch_size=4, num_workers=0)
+    dm = VOCSegmentationDataLoader(root='./data', batch_size=4, num_workers=0)
     num_classes = dm.num_classes
 
     # 截取少量样本，快速跑通全流程
-    train_ds = Subset(dm.train_ds, range(16))
-    val_ds = Subset(dm.val_ds, range(8))
-    test_ds = Subset(dm.test_ds, range(8))
+    train_ds = Subset(dm.data_train, range(16))
+    val_ds = Subset(dm.data_val, range(8))
+    test_ds = Subset(dm.data_test, range(8))
     train_dl = DataLoader(train_ds, batch_size=4, shuffle=True)
     val_dl = DataLoader(val_ds, batch_size=4, shuffle=False)
     test_dl = DataLoader(test_ds, batch_size=4, shuffle=False)

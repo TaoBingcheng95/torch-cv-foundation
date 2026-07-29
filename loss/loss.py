@@ -305,3 +305,40 @@ class DiceLoss(_Loss):
         # Dice 即 alpha=beta=0.5 的 Tversky 特例
         dice_score = DiceLoss.soft_tversky_score(output, target, 0.5, 0.5, smooth, eps, dims)
         return dice_score
+
+
+
+class IoULoss(nn.Module):
+    def __init__(self, weight=None, size_average=True):
+        super(IoULoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1):
+        inputs = F.sigmoid(inputs)       
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+        intersection = (inputs * targets).sum()
+        total = (inputs + targets).sum()
+        union = total - intersection 
+        
+        IoU = (intersection + smooth)/(union + smooth)
+                
+        return 1 - IoU
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, size_average=True, alpha=0.8, gamma=2, smooth=1):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.smooth = smooth
+
+    def forward(self, inputs, targets):
+        inputs = F.sigmoid(inputs)       
+        inputs = inputs.view(-1)
+        targets = targets.view(-1)
+        bce = F.binary_cross_entropy(inputs, targets, reduction='mean')
+        bce_exp = torch.exp(-bce)
+        focal_loss = self.alpha * (1-bce_exp)**self.gamma * bce
+                       
+        return focal_loss
+

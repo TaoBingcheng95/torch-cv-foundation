@@ -309,16 +309,38 @@ class TianchiDataset(Dataset):
 
 
 class UTKFace(Dataset):
-    def __init__(self, data_dir):
-        self.transform = transforms.Compose([transforms.Resize((32, 32)),
-                                             transforms.ToTensor(),
-                                             transforms.Normalize([0.485, 0.456, 0.406],
-                                                                  [0.229, 0.224, 0.225])])
-        self.image_paths = glob(os.path.join(data_dir, '*.jpg'))
+    IMAGENET_MEAN = (0.485, 0.456, 0.406)
+    IMAGENET_STD = (0.229, 0.224, 0.225)
+    RESIZE = (32, 32)
+    def __init__(self, root, transform=None,
+                use_normalize: bool = True,  # 是否归一化
+                ):
+        super().__init__()
+
+        self.root = root
+        self.use_normalize = use_normalize   # plot_sample 反归一化时需要
+
+        # 定义 Transform
+        transform_list = [
+            transforms.RandomHorizontalFlip(),  # 水平翻转
+            transforms.RandomVerticalFlip(),  # 垂直翻转
+            transforms.RandomCrop(self.RESIZE, padding=4), # 随机裁剪，CIFAR 常用增强
+            transforms.ToTensor(),
+        ]
+        if use_normalize:
+            transform_list.append(transforms.Normalize(self.IMAGENET_MEAN, self.IMAGENET_STD))
+        self.transform = transforms.Compose(transform_list)
+
+        # self.transform = transforms.Compose([transforms.Resize(self.RESIZE),
+        #                                      transforms.ToTensor(),
+        #                                      transforms.Normalize(self.IMAGENET_MEAN,
+        #                                                           self.IMAGENET_STD)])
+
         self.images = []
         self.ages = []
         self.genders = []
         self.races = []
+        self.image_paths = glob(os.path.join(self.root, '*.jpg'))
         for fn_path in self.image_paths:
             basename = os.path.basename(fn_path)
             filename = basename.split("_")
@@ -327,8 +349,10 @@ class UTKFace(Dataset):
                 self.ages.append(int(filename[0]))
                 self.genders.append(int(filename[1]))
                 self.races.append(int(filename[2]))
+    
     def __len__(self):
         return len(self.images)
+    
     def __getitem__(self, index)->dict[str, Any]:
         img = Image.open(self.images[index]).convert('RGB')
         img = self.transform(img)

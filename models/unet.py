@@ -13,15 +13,17 @@ class DoubleConv(nn.Module):
     核心卷积块：(3x3 Conv => ReLU) * 2
     这是 U-Net 中 Encoder 和 Decoder 的基本组成单元。
     """
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, mid_channels=None):
         super().__init__()
         # 注意：这里使用了 padding=1，这是现代实现支持任意尺寸输入的关键！
         # 原论文没有 padding，会导致特征图不断缩小。
+        if not mid_channels:
+            mid_channels = out_channels
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )

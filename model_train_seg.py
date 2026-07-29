@@ -3,7 +3,6 @@ import argparse
 import torch
 
 from dataset import auto_pin_memory, get_smart_num_workers
-from dataset import VOC2012ClassSegLoader
 from dataset.voc_dataset import VOCSegmentationDataLoader
 from models.deeplab3plus import DeepLabV3Plus
 from models.backbone import ResNet18Encoder, ResNet50Encoder

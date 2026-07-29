@@ -20,7 +20,7 @@ from .ddp_utils import (
     setup_distributed, cleanup_distributed, barrier,
     reduce_value, _NoopHistory, _NoopVisualizer, _DistributedMetrics
 )
-from metrics import Metrics
+from metrics import ClassificationMetric, SegmentationMetric
 from .basetrainer import BaseTrainer
 
 # 日志配置
@@ -38,7 +38,7 @@ class DDPTrainer(BaseTrainer):
     分布式数据并行训练器（仅支持 torchrun 启动）。
 
     与 BaseTrainer 的关系：核心流程（fit / train_epoch / evaluate_epoch / test）
-    和组件（优化器构建、早停、History、Visualizer、Metrics）完全复用父类，
+    和组件（优化器构建、早停、History、Visualizer、指标计算器）完全复用父类，
     仅在必要处做分布式适配：
 
     - 进程组：构造时自动 setup_distributed()；未经 torchrun 启动时
@@ -152,8 +152,10 @@ class DDPTrainer(BaseTrainer):
             if self.resume:
                 self.load_model(self.resume, resume=True)
             if self.metrics is None:
-                ignore_index = None if self.is_classification else 255
-                self.metrics = Metrics(self.num_classes, ignore_index=ignore_index)
+                # 与 BaseTrainer.init_settings 同步：按任务类型选择计算器
+                self.metrics = (ClassificationMetric(self.num_classes)
+                                if self.is_classification
+                                else SegmentationMetric(self.num_classes))
             if self.compile_model:
                 try:
                     self.model = torch.compile(self.model)

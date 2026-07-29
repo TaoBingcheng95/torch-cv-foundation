@@ -247,55 +247,78 @@ class TrainingVisualizer:
                           confusion_matrix: np.ndarray,
                           elapsed_time: float,
                           speed: float,
-                          is_classification: bool = True) -> None:
+                          is_classification: bool = True) -> str:
         """
-        打印格式化的测试报告。
+        输出格式化的测试报告。
+
+        报告先组装为完整字符串，再以单条多行日志记录经 self.logger 输出，
+        因此会同时出现在终端与日志文件（如 train.log）中，且文件内报告块
+        仅首行带时间戳前缀，内容保持对齐。
 
         Args:
-            results: Metrics.compute() 返回的指标字典
-                     （oa/mpa/mf1 及每类 recall_i/precision_i/f1_i，
-                       分割任务额外含 miou/fwiou）
+            results: metrics.compute() 返回的指标字典
+                     （分类：acc/balanced_acc/macro_f1/kappa；
+                       分割：oa/mpa/mf1/miou/fwiou；
+                       均含每类 recall_i/precision_i/f1_i）
             confusion_matrix: 混淆矩阵 (num_classes × num_classes)
             elapsed_time: 测试耗时（秒）
             speed: 测试吞吐（samples/sec）
-            is_classification: 分类任务为 True；分割任务额外打印 mIoU/FWIoU
+            is_classification: 任务类型，决定汇总指标的打印集合
+
+        Returns:
+            报告文本（不含日志前缀），供调用方另作他用（如写入独立报告文件）
         """
         num_classes = confusion_matrix.shape[0]
+        lines: List[str] = []
 
-        print("\n" + "=" * 60)
-        print("🧪 TEST REPORT".center(60))
-        print("=" * 60)
+        lines.append("=" * 60)
+        lines.append("🧪 TEST REPORT".center(60))
+        lines.append("=" * 60)
 
-        print(f"\n📊 Overall Metrics:")
-        print(f"  • Accuracy (OA): {fmt_value(results.get('oa'), '.2f', scale=100, suffix='%')}")
-        print(f"  • Mean PA      : {fmt_value(results.get('mpa'), '.2f', scale=100, suffix='%')}")
-        print(f"  • Mean F1      : {fmt_value(results.get('mf1'), '.2f', scale=100, suffix='%')}")
-        if not is_classification:
-            print(f"  • Mean IoU     : {fmt_value(results.get('miou'), '.2f', scale=100, suffix='%')}")
-            print(f"  • FW IoU       : {fmt_value(results.get('fwiou'), '.2f', scale=100, suffix='%')}")
+        lines.append("")
+        lines.append("📊 Overall Metrics:")
+        if is_classification:
+            lines.append(f"  • Accuracy     : {fmt_value(results.get('acc'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Balanced Acc : {fmt_value(results.get('balanced_acc'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Macro F1     : {fmt_value(results.get('macro_f1'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Cohen Kappa  : {fmt_value(results.get('kappa'), '.4f')}")
+        else:
+            lines.append(f"  • Accuracy (OA): {fmt_value(results.get('oa'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Mean PA      : {fmt_value(results.get('mpa'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Mean F1      : {fmt_value(results.get('mf1'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • Mean IoU     : {fmt_value(results.get('miou'), '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • FW IoU       : {fmt_value(results.get('fwiou'), '.2f', scale=100, suffix='%')}")
 
-        # 每类指标（来自 Metrics.compute 的 recall_i / precision_i / f1_i）
-        print(f"\n📋 Per-Class Metrics (Recall / Precision / F1):")
+        # 每类指标（来自 metrics.compute 的 recall_i / precision_i / f1_i）
+        lines.append("")
+        lines.append("📋 Per-Class Metrics (Recall / Precision / F1):")
         for cls_idx in range(num_classes):
             cls_name = self.class_names[cls_idx] if cls_idx < len(self.class_names) else f"Class-{cls_idx}"
             recall = results.get(f'recall_{cls_idx}')
             precision = results.get(f'precision_{cls_idx}')
             f1 = results.get(f'f1_{cls_idx}')
-            print(f"  • {cls_name:12s}: "
-                  f"{fmt_value(recall, '.2f', scale=100, suffix='%')} / "
-                  f"{fmt_value(precision, '.2f', scale=100, suffix='%')} / "
-                  f"{fmt_value(f1, '.2f', scale=100, suffix='%')}")
+            lines.append(f"  • {cls_name:12s}: "
+                         f"{fmt_value(recall, '.2f', scale=100, suffix='%')} / "
+                         f"{fmt_value(precision, '.2f', scale=100, suffix='%')} / "
+                         f"{fmt_value(f1, '.2f', scale=100, suffix='%')}")
 
         # 性能指标
-        print(f"\n⚡ Performance:")
-        print(f"  • Time         : {fmt_value(elapsed_time, '.2f', suffix='s')}")
-        print(f"  • Speed        : {fmt_value(speed, '.0f', suffix=' samples/sec')}")
+        lines.append("")
+        lines.append("⚡ Performance:")
+        lines.append(f"  • Time         : {fmt_value(elapsed_time, '.2f', suffix='s')}")
+        lines.append(f"  • Speed        : {fmt_value(speed, '.0f', suffix=' samples/sec')}")
 
         # 混淆矩阵摘要
         diag = float(np.trace(confusion_matrix))
         total = float(confusion_matrix.sum())
-        print(f"\n🔍 Confusion Matrix Summary:")
-        print(f"  • Diagonal (correct)   : {int(diag)}")
-        print(f"  • Off-diagonal (error) : {int(total - diag)}")
+        lines.append("")
+        lines.append("🔍 Confusion Matrix Summary:")
+        lines.append(f"  • Diagonal (correct)   : {int(diag)}")
+        lines.append(f"  • Off-diagonal (error) : {int(total - diag)}")
 
-        print("=" * 60 + "\n")
+        lines.append("=" * 60)
+
+        report = "\n".join(lines)
+        # 首行换行：让报告块从日志前缀的下一行开始，保持整块对齐
+        self.logger.info("\n%s", report)
+        return report

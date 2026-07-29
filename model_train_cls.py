@@ -51,7 +51,7 @@ if __name__ == '__main__':
     
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
-    dm = MNISTDataLoader(root='./data',
+    dm = FashionMNISTDataLoader(root='./data',
                                 download=False,
                                 use_normalize=True,
                                 # val_split=0.2,

@@ -22,7 +22,7 @@ from .visualizer import TrainingVisualizer
 from .utils import EarlyStopping, History
 from .logger import get_logger, add_file_handler
 
-from metrics import Metrics
+from metrics import ClassificationMetric, SegmentationMetric
 from optimizers import build_optimizer, build_scheduler, clip_grad_norm
 from utils.hardware import select_device, collect_hardware_report
 
@@ -85,7 +85,8 @@ class BaseTrainer:
             - 搭配 ReduceLROnPlateau 时应大于其 patience（建议 2~3 倍），
               否则 LR 还没来得及衰减就会触发早停。
         :param monitor: 统一监控指标，best.pt 保存 / 早停 / ReduceLROnPlateau 共用。
-            可选 'loss'、'acc'，或 Metrics.compute() 结果中的任意键（如 'oa'、'miou'）
+            可选 'loss'、'acc'，或 metrics.compute() 结果中的任意键
+            （分类如 'acc'、'macro_f1'，分割如 'miou'）
         :param monitor_mode: 'auto' 按名称推断（名称含 'loss' → min，其余 → max），
             也可显式指定 'min' / 'max'
         :param use_tensorboard: 是否启用 TensorBoard 标准日志。writer 在
@@ -244,10 +245,12 @@ class BaseTrainer:
         # 指标计算器（基于混淆矩阵，在 CPU 上累积，避免 GPU 内存占用过高）
         self.logger.info("📊 Initializing metrics calculator...")
         if self.metrics is None:
-            # 分类任务不忽略任何标签；分割任务默认忽略 255（VOC 等数据集
-            # 未标注区域的通用约定）；如需其他 ignore_index，直接传入自定义 metrics 实例
-            ignore_index = None if self.is_classification else 255
-            self.metrics = Metrics(self.num_classes, ignore_index=ignore_index)
+            # 未传入自定义 metrics 时按任务类型选择计算器；
+            # ignore_index 等任务默认值已下沉到各指标类内部（分割默认 255），
+            # 如需定制（top_k、其他 ignore_index 等）直接传入实例
+            self.metrics = (ClassificationMetric(self.num_classes)
+                            if self.is_classification
+                            else SegmentationMetric(self.num_classes))
 
         # 模型编译（PyTorch 2.0+）
         if self.compile_model:
@@ -392,9 +395,9 @@ class BaseTrainer:
 
     def log_val_metrics(self, results: Dict[str, float], step: int) -> None:
         """
-        记录 Metrics.compute() 的全部验证指标。
+        记录 metrics.compute() 的全部验证指标。
 
-        汇总指标（oa/mpa/miou/fwiou/mf1 等）写入 'val/'；
+        汇总指标（分类 acc/macro_f1、分割 oa/miou/mf1 等）写入 'val/'；
         逐类指标（iou_0/precision_1 等）按类别名分组写入 'val_per_class/'，
         避免类别较多时污染主面板。
         """
@@ -729,8 +732,12 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
-                targets = targets.squeeze()
-                targets =targets.long()
+                # 分割标签常为 (N,1,H,W)，仅去掉通道维得到 (N,H,W)；
+                # 分类标签 (N,) 不受影响；不用无参 squeeze()，
+                # 避免 bs=1 时误删 batch 维（CE loss 会报 batch 不匹配）
+                if targets.dim() == 4 and targets.size(1) == 1:
+                    targets = targets.squeeze(1)
+                targets = targets.long()
 
                 # 前向（AMP 启用时在 autocast 下以低精度计算）+ 反向传播
                 self.optimizer.zero_grad(set_to_none=True) 
@@ -832,6 +839,17 @@ class BaseTrainer:
         loss = self.criterion(logits, targets)
         return loss
 
+
+    @staticmethod
+    def _overall_acc(results: Dict[str, float]) -> float:
+        """
+        从指标结果中提取总体精度：分类为 'acc'，分割为 'oa'，
+        两者语义相同（对角线占比）；自定义 metrics 缺失时回退 0.0。
+        """
+        if 'acc' in results:
+            return results['acc']
+        return results.get('oa', 0.0)
+
  
     @torch.no_grad()
     def evaluate_epoch(self) -> Dict[str, Any]:
@@ -840,8 +858,8 @@ class BaseTrainer:
         前向推理、损失计算与指标累积委托给 validation_step（子类可覆写）。
 
         Returns:
-            验证结果字典：{'loss', 'acc', 'time'} + Metrics.compute() 的全部指标
-            （如 'oa'、'miou' 等，供统一 monitor 选用）
+            验证结果字典：{'loss', 'acc', 'time'} + metrics.compute() 的全部指标
+            （分类如 'acc'、'macro_f1'，分割如 'miou'，供统一 monitor 选用）
         """
 
         total_loss = 0.0
@@ -860,8 +878,12 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
-                targets = targets.squeeze()
-                targets =targets.long()
+                # 分割标签常为 (N,1,H,W)，仅去掉通道维得到 (N,H,W)；
+                # 分类标签 (N,) 不受影响；不用无参 squeeze()，
+                # 避免 bs=1 时误删 batch 维（CE loss 会报 batch 不匹配）
+                if targets.dim() == 4 and targets.size(1) == 1:
+                    targets = targets.squeeze(1)
+                targets = targets.long()
 
                 # 前向推理 + 损失 + 指标累积（见 validation_step；AMP 下同样用 autocast 加速）
                 with autocast(device_type=self.device.type,
@@ -894,13 +916,13 @@ class BaseTrainer:
             )
         avg_loss = total_loss.item() / total_samples
         results = self.metrics.compute()
-        val_acc = results['oa']  # OA: Overall Accuracy
+        val_acc = self._overall_acc(results)
 
         # 记录元数据
         val_time = time.time() - start_time
         samples_per_sec = total_samples / val_time
 
-        # 标准日志：Metrics.compute() 全量指标（含逐类分组）+ 损失/吞吐
+        # 标准日志：metrics.compute() 全量指标（含逐类分组）+ 损失/吞吐
         self.log_val_metrics(results, self.current_epoch)
         self.log_scalars({
             'epoch_loss': avg_loss,
@@ -950,8 +972,8 @@ class BaseTrainer:
         logits = self.model(inputs)
         loss = self.criterion(logits, targets)
 
-        # Metrics 的混淆矩阵在 CPU 上，先搬运避免 GPU 训练时设备不匹配
-        # （logits 传入后由 Metrics.update 自动 argmax）
+        # 指标计算器的混淆矩阵在 CPU 上，先搬运避免 GPU 训练时设备不匹配
+        # （logits 传入后由 metrics.update 自动 argmax）
         self.metrics.update(logits.detach().cpu(), targets.detach().cpu())
         return loss, logits
 
@@ -999,8 +1021,12 @@ class BaseTrainer:
             try:
                 inputs = inputs.to(self.device, non_blocking=True)
                 targets = targets.to(self.device, non_blocking=True)
-                targets = targets.squeeze()
-                targets =targets.long()
+                # 分割标签常为 (N,1,H,W)，仅去掉通道维得到 (N,H,W)；
+                # 分类标签 (N,) 不受影响；不用无参 squeeze()，
+                # 避免 bs=1 时误删 batch 维（CE loss 会报 batch 不匹配）
+                if targets.dim() == 4 and targets.size(1) == 1:
+                    targets = targets.squeeze(1)
+                targets = targets.long()
 
                 # 前向推理 + 损失 + 指标累积（与验证共用 validation_step 钩子，
                 # 子类覆写后 test 同步生效）
@@ -1053,7 +1079,7 @@ class BaseTrainer:
             )
         avg_loss = total_loss.item() / total_samples
         results = self.metrics.compute()
-        test_acc = results.get('oa', 0.0)
+        test_acc = self._overall_acc(results)
         # 混淆矩阵从指标计算器直接获取，转 numpy 供绘图使用
         cnf_matrix = self.metrics.confusion_matrix.cpu().numpy()
         self.cnf_matrix = cnf_matrix

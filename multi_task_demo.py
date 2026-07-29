@@ -6,15 +6,20 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, random_split
 
-from dataset.components.custom_ds import UTKFace
-from models.deprecated.HydraNet import HydraNet
+from dataset.custom_ds import UTKFace
+from models.HydraNet import HydraNet
+
+from utils.hardware import select_device
+
+torch.set_float32_matmul_precision('medium')
+# os.environ['TORCHDYNAMO_VERBOSE'] = '1'
 
 
 if __name__ == '__main__':
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = select_device()
 
-    ds = UTKFace("../data/UTKFace")
+    ds = UTKFace("./data/UTKFace")
     train_ds, val_ds = random_split(ds, [0.5, 0.5])
     train_dataloader = DataLoader(train_ds, shuffle=True, batch_size=16, pin_memory=True, num_workers=0)
     val_dataloader = DataLoader(val_ds, shuffle=False, batch_size=16, pin_memory=True, num_workers=0)

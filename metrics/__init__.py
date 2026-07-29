@@ -1,8 +1,16 @@
-from .metrics import Metrics, SegmentationMetric, TorchMetricsWrapper
+from .metrics import (
+    ClassificationMetric,
+    ConfusionMatrix,
+    SegmentationMetric,
+    TorchMetricsWrapper,
+    separated_kappa,
+)
 
 __all__ = [
-    'Metrics',
+    'ClassificationMetric',
+    'ConfusionMatrix',
     'SegmentationMetric',
     'TorchMetricsWrapper',
+    'separated_kappa',
 ]
 

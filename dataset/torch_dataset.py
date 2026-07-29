@@ -3,7 +3,10 @@ from typing import Optional, Union
 
 import torch
 from torch.utils.data import DataLoader, Subset, random_split
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
+# from torchvision import transforms
+from torchvision.transforms import transforms
+
 from torchvision.datasets import CIFAR10, FashionMNIST, MNIST
 
 
@@ -12,8 +15,8 @@ class MNISTDataLoader:
     # MNIST 的均值和标准差
     MNIST_MEAN = 0.1307
     MNIST_STD = 0.3081
-    DEFAULT_SIZE = 28
-    RESIZE_SIZE = 32
+    DEFAULT_SIZE = (28, 28)
+    RESIZE_SIZE = (32, 32)
     DEFAULT_TRAIN_LENGTH = 60000
     DEFAULT_TEST_LENGTH = 10000
     def __init__(self, 
@@ -52,13 +55,13 @@ class MNISTDataLoader:
                                                        std=self.MNIST_STD))
         self.transform = transforms.Compose(transform_list)
 
-        self.data_test = MNIST(
+        self.test_ds = MNIST(
             root=root,
             train=False,
             download=download,
             transform=self.transform
         ) # 10000 items
-        self.full_data_train = MNIST(
+        full_train_ds = MNIST(
             root=root, 
             train=True, 
             download=download,
@@ -67,24 +70,25 @@ class MNISTDataLoader:
 
         # random_split 返回的是 Subset 对象，它们会自动继承 full_train_set 的 transform
         if val_split > 0:
-            total_count = len(self.full_data_train)
+            total_count = len(full_train_ds)
             # float 按比例、int 按绝对数量
             val_count = int(total_count * val_split) if isinstance(val_split, float) else val_split
             train_count = total_count - val_count
-            self.data_train, self.data_val = random_split(
-                dataset=self.full_data_train,
+            self.train_ds, self.val_ds = random_split(
+                dataset=full_train_ds,
                 lengths=[train_count, val_count],
                 generator=self.generator)
         else:
             # 不划分验证集时用测试集充当；注意若据此做模型选择/早停，
             # 测试指标会虚高（信息泄漏），仅适合快速实验
-            self.data_train = self.full_data_train
-            self.data_val = self.data_test
+            self.train_ds = full_train_ds
+            self.test_ds = self.test_ds
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
-            dataset=self.data_train,
+            dataset=self.train_ds,
             batch_size=self.batch_size,
+            drop_last=True,
             shuffle=True,                      # 训练集必须 shuffle
             num_workers=self.num_workers,      # 初学者建议设为 0，避免 Windows 多进程报错
             pin_memory=self.pin_memory,
@@ -96,8 +100,9 @@ class MNISTDataLoader:
 
     def val_dataloader(self) -> DataLoader:
         return DataLoader(
-            dataset=self.data_val,
+            dataset=self.val_ds,
             batch_size=self.batch_size,
+            drop_last=False,
             shuffle=False,      # 验证集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
@@ -107,8 +112,9 @@ class MNISTDataLoader:
 
     def test_dataloader(self) -> DataLoader:
         return DataLoader(
-            dataset=self.data_test, 
+            dataset=self.test_ds, 
             batch_size=self.batch_size, 
+            drop_last=False,
             shuffle=False,      # 测试集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
@@ -127,11 +133,11 @@ class MNISTDataLoader:
 
     @property
     def classes(self) -> list[str]:
-        return self.full_data_train.classes  # type: ignore
+        return self.train_ds.classes  # type: ignore
     
     @property
     def class_to_idx(self) -> dict[str, int]:
-        return self.full_data_train.class_to_idx
+        return self.train_ds.class_to_idx
 
     @property
     def idx_to_class(self) -> dict[int, str]:
@@ -173,8 +179,8 @@ class FashionMNISTDataLoader:
     # FashionMNIST 的均值和标准差
     FASHIONMNIST_MEAN = 0.2860
     FASHIONMNIST_STD = 0.3529
-    DEFAULT_SIZE = 28
-    RESIZE_SIZE = 32
+    DEFAULT_SIZE = (28, 28)
+    RESIZE_SIZE = (32, 32)
     DEFAULT_TRAIN_LENGTH = 60000
     DEFAULT_TEST_LENGTH = 10000
     def __init__(self, root: str='./data',
@@ -210,7 +216,7 @@ class FashionMNISTDataLoader:
                                                        std=self.FASHIONMNIST_STD))
         self.transform = transforms.Compose(transform_list)
 
-        self.full_train_ds = FashionMNIST(
+        full_train_ds = FashionMNIST(
             root=root, 
             train=True, 
             download=download,
@@ -225,23 +231,24 @@ class FashionMNISTDataLoader:
         )
 
         if val_split > 0:
-            total_count = len(self.full_train_ds)
+            total_count = len(full_train_ds)
             # float 按比例、int 按绝对数量
             val_count = int(total_count * val_split) if isinstance(val_split, float) else val_split
             train_count = total_count - val_count
-            self.train_ds, self.val_ds = random_split(self.full_train_ds,
+            self.train_ds, self.val_ds = random_split(full_train_ds,
                                                       lengths=[train_count, val_count],
                                                       generator=self.generator)
         else:
             # 不划分验证集时用测试集充当；注意若据此做模型选择/早停，
             # 测试指标会虚高（信息泄漏），仅适合快速实验
-            self.train_ds = self.full_train_ds
+            self.train_ds = full_train_ds
             self.val_ds = self.test_ds
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             dataset=self.train_ds,
             batch_size=self.batch_size,
+            drop_last=True,
             shuffle=True,                       # 训练集必须 shuffle
             num_workers=self.num_workers,       # 初学者建议设为 0，避免 Windows 多进程报错
             pin_memory=self.pin_memory,
@@ -253,6 +260,7 @@ class FashionMNISTDataLoader:
         return DataLoader(
             dataset=self.val_ds,
             batch_size=self.batch_size,
+            drop_last=False,
             shuffle=False,      # 验证集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
@@ -264,6 +272,7 @@ class FashionMNISTDataLoader:
         return DataLoader(
             dataset=self.test_ds, 
             batch_size=self.batch_size, 
+            drop_last=False,
             shuffle=False,      # 测试集不能 shuffle
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
@@ -282,11 +291,11 @@ class FashionMNISTDataLoader:
 
     @property
     def classes(self) -> list[str]:
-        return self.full_train_ds.classes  # type: ignore
+        return self.train_ds.classes  # type: ignore
     
     @property
     def class_to_idx(self) -> dict[str, int]:
-        return self.full_train_ds.class_to_idx
+        return self.train_ds.class_to_idx
     
     @property
     def idx_to_class(self) -> dict[int, str]:
@@ -374,30 +383,32 @@ class CIFAR10DataLoader:
         # 加载原始数据集：train/val 各建一份实例，分别绑定各自的 transform
         # 注意：random_split 返回的两个 Subset 持有同一个底层 dataset，
         # 若在其上互相赋值 transform 会彼此覆盖，导致训练集增强失效
-        self.full_train_ds = CIFAR10(root=self.root, train=True, download=download, transform=self.train_transform)
+        full_train_ds = CIFAR10(root=self.root, train=True, download=download, transform=self.train_transform)
         full_val_ds = CIFAR10(root=self.root, train=True, download=False, transform=self.val_transform)
+        
         self.test_ds = CIFAR10(root=self.root, train=False, download=download, transform=self.val_transform)
         
         # 划分训练集和验证集
         if val_split > 0:
-            total_count = len(self.full_train_ds)
+            total_count = len(full_train_ds)
             # float 按比例、int 按绝对数量
             val_count = int(total_count * val_split) if isinstance(val_split, float) else val_split
             train_count = total_count - val_count
             #【重要】只生成一次随机索引，两份实例共享同一划分，避免 train/val 样本重叠
             indices = torch.randperm(total_count, generator=self.generator).tolist()
-            self.train_ds = Subset(self.full_train_ds, indices[:train_count])
+            self.train_ds = Subset(full_train_ds, indices[:train_count])
             self.val_ds = Subset(full_val_ds, indices[train_count:])
         else:
             # 不划分验证集时用测试集充当；注意若据此做模型选择/早停，
             # 测试指标会虚高（信息泄漏），仅适合快速实验
-            self.train_ds = self.full_train_ds
+            self.train_ds = full_train_ds
             self.val_ds = self.test_ds
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(self.train_ds, 
                           batch_size=self.batch_size, 
                           shuffle=True, 
+                          drop_last=True,
                           num_workers=self.num_workers,
                           pin_memory=self.pin_memory,
                           persistent_workers=self.num_workers > 0,
@@ -407,6 +418,7 @@ class CIFAR10DataLoader:
         return DataLoader(self.val_ds, 
                           batch_size=self.batch_size, 
                           shuffle=False, 
+                          drop_last=False,
                           num_workers=self.num_workers,
                           pin_memory=self.pin_memory,
                           persistent_workers=self.num_workers > 0,)
@@ -415,6 +427,7 @@ class CIFAR10DataLoader:
         return DataLoader(self.test_ds, 
                           batch_size=self.batch_size, 
                           shuffle=False, 
+                          drop_last=False,
                           num_workers=self.num_workers,
                           pin_memory=self.pin_memory,
                           persistent_workers=self.num_workers > 0,)
@@ -479,9 +492,9 @@ if __name__ == '__main__':
     print(f"Val size: {len(data_module.val_ds)}")
     print(f"Test size: {len(data_module.test_ds)}")
     
-    # 查看一个 batch 的形状
-    train_loader = data_module.train_dataloader()
-    imgs, labels = next(iter(train_loader))
-    print(f"Batch shape: {imgs.shape}, Labels shape: {labels.shape}")
+    # # 查看一个 batch 的形状
+    # train_loader = data_module.data_train
+    # imgs, labels = next(iter(train_loader))
+    # print(f"Batch shape: {imgs.shape}, Labels shape: {len(labels)}")
     
     data_module.plot_sample()
