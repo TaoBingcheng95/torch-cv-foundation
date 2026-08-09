@@ -1,4 +1,5 @@
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -56,7 +57,7 @@ class BaseTrainer:
                  num_classes: int = 10,
                  epochs: int = 30,
                  log_interval: int = 5,
-                 eval_interval: int = 5,  # 每隔多少个 epoch 验证一次（1 = 每轮都验证）
+                 eval_interval: int = 1,  # 每隔多少个 epoch 验证一次（1 = 每轮都验证）
                  device: Union[str, torch.device] = 'auto',  # 'auto' | 'cuda' | 'cpu' | 'mps'，也可直接传 torch.device
                  optimizer_cfg: Optional[Dict[str, Any]] = None,
                  scheduler_cfg: Optional[Dict[str, Any]] = None,
@@ -66,9 +67,9 @@ class BaseTrainer:
                  compile_model:bool = False, 
                  use_amp: bool = False,  # 混合精度训练（AMP）
                  max_grad_norm: Optional[float] = None,  # 梯度裁剪
-                 early_stop_patience: Optional[int] = 10,  # 早停容忍次数（None 表示禁用早停）
+                 early_stop_patience: Optional[int] = 3,  # 早停容忍次数（None 表示禁用早停）
                  early_stop_delta: float = 0.0,  # 早停判定的最小改善阈值
-                 monitor: str = 'loss',  # 统一监控指标：best.pt / 早停 / Plateau 共用
+                 monitor: str = 'val/loss',  # 统一监控指标：best.pt / 早停 / Plateau 共用
                  monitor_mode: str = 'auto',  # 'auto' | 'min' | 'max'
                  output_dir: str='./output',
                  use_tensorboard: bool = True,):  # **kwargs     
@@ -79,15 +80,18 @@ class BaseTrainer:
             示例: {"type": "adamw", "lr": 1e-3, "weight_decay": 1e-4, "momentum": 0.9}
         :param scheduler_cfg: 调度器配置字典（None 表示不使用）
             示例: {"type": "reduceLROnPlateau", "mode": "min", "patience": 5, "factor": 0.5}
-        :param early_stop_patience: 早停容忍次数，监控指标连续多少次不改善后停训；
-            None 表示禁用早停。注意：
-            - eval_interval > 1 时按“验证次数”而非 epoch 数计；
-            - 搭配 ReduceLROnPlateau 时应大于其 patience（建议 2~3 倍），
-              否则 LR 还没来得及衰减就会触发早停。
+        :param early_stop_patience: 早停容忍次数。语义为"连续 N 次验证不改善后停训"
+            （与 PyTorch Lightning 一致），不是训练 epoch 数。
+            实际等效 epoch 数 = early_stop_patience × eval_interval。
+            例如 eval_interval=5、patience=5 时，至少连续 25 个 epoch 不改善才会停。
+            None 表示禁用早停。搭配 ReduceLROnPlateau 时应大于其 patience
+            （建议 2~3 倍），否则 LR 还没来得及衰减就会触发早停。
         :param monitor: 统一监控指标，best.pt 保存 / 早停 / ReduceLROnPlateau 共用。
-            可选 'loss'、'acc'，或 metrics.compute() 结果中的任意键
-            （分类如 'acc'、'macro_f1'，分割如 'miou'）
-        :param monitor_mode: 'auto' 按名称推断（名称含 'loss' → min，其余 → max），
+            必须使用 slash 前缀风格，与 metrics.csv 列名一致：
+            'val/loss'、'val/acc' 或 metrics.compute() 结果中的任意键加 'val/' 前缀
+            （分类如 'val/macro_f1'，分割如 'val/miou'）
+        :param monitor_mode: 'auto' 按名称推断
+            （含 loss/err/perplexity → min；含 acc/f1/iou/precision/recall/kappa/oa/mpa/mf1 → max），
             也可显式指定 'min' / 'max'
         :param use_tensorboard: 是否启用 TensorBoard 标准日志。writer 在
             init_settings 中创建（写入 save_dir/tensorboard），生命周期由
@@ -122,9 +126,29 @@ class BaseTrainer:
         # 起始 epoch（断点续训时由 load_model 恢复）
         self.start_epoch = 0
         # 统一监控指标：best.pt 保存、早停、ReduceLROnPlateau 共用同一 monitor
+        # 强制 slash 前缀风格（'val/loss'、'val/acc'），与 metrics.csv 列名一致；
+        # 内部访问 val_metrics 时用 _resolve_monitor_key 取原始键名（'loss'、'acc'）
+        if '/' not in monitor:
+            raise ValueError(
+                f"monitor must use slash-prefix style (e.g. 'val/loss', 'val/acc'), "
+                f"got '{monitor}'"
+            )
         self.monitor = monitor
+        # mode 推断：按 monitor 末段关键字匹配（不区分大小写）
         if monitor_mode == 'auto':
-            self.monitor_mode = 'min' if 'loss' in monitor else 'max'
+            key = monitor.split('/')[-1].lower()
+            MIN_KEYS = ('loss', 'err', 'perplexity')
+            MAX_KEYS = ('acc', 'f1', 'iou', 'precision', 'recall', 'kappa', 'oa', 'mpa', 'mf1')
+            if any(k in key for k in MIN_KEYS):
+                self.monitor_mode = 'min'
+            elif any(k in key for k in MAX_KEYS):
+                self.monitor_mode = 'max'
+            else:
+                raise ValueError(
+                    f"Cannot infer monitor_mode for monitor='{monitor}' "
+                    f"(key='{key}' not in MIN_KEYS={MIN_KEYS} or MAX_KEYS={MAX_KEYS}), "
+                    f"please specify monitor_mode='min'/'max' explicitly"
+                )
         elif monitor_mode in ('min', 'max'):
             self.monitor_mode = monitor_mode
         else:
@@ -180,7 +204,7 @@ class BaseTrainer:
             logger=self.logger,
         )
 
-        # 指标记录（内存列表供绘图；持久化由 History 组件写入 JSONL，
+        # 指标记录（内存列表供绘图；持久化由 History 组件写入 CSV（metrics.csv），
         # 断点续训时由 load_model 从旧目录的日志恢复，保证曲线完整衔接；
         # 全新训练应新建 Trainer 实例）
         self.metrics = metrics
@@ -202,10 +226,22 @@ class BaseTrainer:
         # 输出目录
         os.makedirs(self.save_dir, exist_ok=True)
         self.logger.info(f"📁 Output directory: {self.save_dir}")
-        add_file_handler(self.logger, self.save_dir/ "train.log")
 
-        # 训练历史记录器（JSONL 逐条追加 + flush，崩溃安全；
-        self.history = History(self.save_dir / 'training_log.jsonl')
+        # 清理上一个 trainer 残留的 FileHandler，避免日志串文件
+        # （self.logger 是模块级单例，多实例共享；add_file_handler 按路径去重，
+        # 但不同 save_dir 的 train.log 路径不同，无法被去重，会累积）
+        for h in list(self.logger.handlers):
+            if isinstance(h, logging.FileHandler):
+                self.logger.removeHandler(h)
+                h.close()
+
+        add_file_handler(self.logger, self.save_dir / "train.log")
+
+        # 训练历史记录器（CSV 追加 + flush，崩溃安全；Lightning 风格表头）
+        self.history = History(
+            self.save_dir / 'metrics.csv',
+            fieldnames=self._build_history_fieldnames(),
+        )
 
         # TensorBoard writer（标准日志，与 checkpoint 同目录便于归档对比；
         # 查看：tensorboard --logdir <output_dir>，各时间戳子目录自动识别为 run）
@@ -304,6 +340,36 @@ class BaseTrainer:
             )
 
 
+    def _build_history_fieldnames(self) -> List[str]:
+        """
+        构造 CSV 表头列名（Lightning 风格 slash 前缀）。
+
+        固定元数据列 + train 专属列 + val 通用列 + 任务相关汇总列。
+        逐类指标不入 CSV（走 TensorBoard 的 val_per_class/ 分组），
+        top_k 暂不写入（后续按需扩展）。
+
+        列结构（按出现顺序）：
+            epoch, phase
+            train/loss, train/lr, train/time
+            val/loss, val/acc, val/time
+            val/<summary_metrics...>   # 分类: balanced_acc/macro_*/weighted_f1/kappa
+                                       # 分割: mpa/miou/fwiou/mf1
+        """
+        # 1. 元数据（train/val 行均填）
+        fields = ['epoch', 'phase']
+        # 2. train 专属（train 行填，val 行留空）
+        fields += ['train/loss', 'train/lr', 'train/time']
+        # 3. val 通用（val 行填，train 行留空）；val/acc 统一对应分类 acc / 分割 oa
+        fields += ['val/loss', 'val/acc', 'val/time']
+        # 4. 任务相关汇总指标
+        if self.is_classification:
+            fields += ['val/balanced_acc', 'val/macro_precision', 'val/macro_recall',
+                       'val/macro_f1', 'val/weighted_f1', 'val/kappa']
+        else:
+            fields += ['val/mpa', 'val/miou', 'val/fwiou', 'val/mf1']
+        return fields
+
+
     def _empty_cache(self) -> None:
         """
         按设备类型释放缓存分配器占用的显存（OOM 恢复用）。
@@ -316,6 +382,44 @@ class BaseTrainer:
             torch.cuda.empty_cache()
         elif self.device.type == 'mps' and hasattr(torch, 'mps'):
             torch.mps.empty_cache()
+
+
+    def _resolve_monitor_key(self, val_metrics: Dict[str, Any]) -> Tuple[str, float]:
+        """
+        从 val_metrics 中取出 monitor 对应的原始键名与指标值。
+
+        monitor 采用 slash 前缀风格（'val/loss'、'val/acc'），但 val_metrics
+        的键是原始短名（'loss'、'acc'、'miou' 等）。这里做一次归一化映射：
+            'val/loss' → 'loss'
+            'val/acc' → 'acc'（ClassificationMetric.compute() 输出 'acc'）
+            'val/oa'  → 'oa' （SegmentationMetric.compute() 输出 'oa'）
+            'val/miou' → 'miou'
+            ...（取 '/' 之后的部分）
+
+        特殊兼容：'val/acc' 在分割任务中对应 'oa'（_overall_acc 已统一为 acc），
+        但 val_metrics dict 里仍是原始 'oa' 键，因此对分割任务做一次 acc→oa 映射。
+
+        Args:
+            val_metrics: evaluate_epoch 返回的指标字典
+
+        Returns:
+            (原始键名, 指标值)
+
+        Raises:
+            KeyError: monitor 末段在 val_metrics 中找不到（含 acc↔oa 兜底后仍失败）
+        """
+        key = self.monitor.split('/')[-1]
+        if key in val_metrics:
+            return key, val_metrics[key]
+        # acc/oa 互转兜底（分割 monitor='val/acc' 但 metrics 输出 'oa'，反之同理）
+        if key == 'acc' and 'oa' in val_metrics:
+            return 'oa', val_metrics['oa']
+        if key == 'oa' and 'acc' in val_metrics:
+            return 'acc', val_metrics['acc']
+        raise KeyError(
+            f"monitor key '{key}' (from monitor='{self.monitor}') not found in "
+            f"val_metrics, available keys: {sorted(val_metrics.keys())}"
+        )
 
 
     def _is_better(self, value: float) -> bool:
@@ -348,13 +452,9 @@ class BaseTrainer:
                 return self.optimizer.param_groups[0]['lr']
             # 统一监控指标（与 best.pt / 早停一致），
             # mode 对齐已在 init_optim_scheduler 构建时校验
-            metric = val_metrics.get(self.monitor)
-            if metric is None:
-                self.logger.warning(
-                    f"Monitor key '{self.monitor}' not found in val_metrics, using 'loss'"
-                )
-                metric = val_metrics['loss']
-            
+            # monitor 采用 slash 前缀风格，这里归一化取原始键
+            _, metric = self._resolve_monitor_key(val_metrics)
+
             self.scheduler.step(metric)
             self.logger.debug(
                 f"ReduceLROnPlateau step: {self.monitor}={metric:.4f}"
@@ -366,7 +466,7 @@ class BaseTrainer:
 
 
     # ==================== SummaryWriter 标准日志接口层 ====================
-    # 两套日志分工：自定义日志（logger / History JSONL / visualizer）面向
+    # 两套日志分工：自定义日志（logger / History CSV / visualizer）面向
     # 实验过程中的快速查看；以下方法统一收拢 SummaryWriter 调用，按业内
     # 标准工具的形式记录（标量曲线 / 模型结构 / 超参对比）。
     # 后续迁移 wandb / mlflow 等工具时，只需替换这一层实现，
@@ -475,7 +575,7 @@ class BaseTrainer:
         执行完整训练流程。
 
         每个 epoch：train_epoch() 训练 → 按 eval_interval 调用 evaluate_epoch() 验证
-        （最后一轮强制验证）→ 调度器 step → 训练历史落盘（JSONL）→
+        （最后一轮强制验证）→ 调度器 step → 训练历史落盘（CSV）→
         monitor 改善时保存 best.pt → 早停判断 → 保存 last.pt。
         训练结束后自动恢复 best.pt 权重并绘制训练曲线；
         测试与训练解耦，由用户在 fit() 结束后手动调用 test()。
@@ -512,12 +612,14 @@ class BaseTrainer:
                 patience=self.early_stop_patience,
                 delta=self.early_stop_delta,
                 mode=self.monitor_mode,
+                monitor_name=self.monitor,
                 verbose=False,
             )
             self.logger.info(
                 f"⏳ Early stopping enabled | monitor: {self.monitor} ({self.monitor_mode}) | "
-                f"patience: {self.early_stop_patience} "
-                f"validation rounds | delta: {self.early_stop_delta}"
+                f"patience: {self.early_stop_patience} validation rounds "
+                f"(≈ {self.early_stop_patience * self.eval_interval} epochs) | "
+                f"delta: {self.early_stop_delta}"
             )
             # 搭配 Plateau 调度器时，早停 patience 应大于降 LR 的 patience，
             # 否则 LR 还没来得及衰减就触发早停，Plateau 形同虚设
@@ -566,11 +668,8 @@ class BaseTrainer:
             if should_validate:
                 val_metrics = self.evaluate_epoch()
                 # 统一 monitor 必须存在于验证指标中（首轮验证即 fail fast）
-                if self.monitor not in val_metrics:
-                    raise KeyError(
-                        f"monitor '{self.monitor}' not found in validation metrics, "
-                        f"available keys: {sorted(val_metrics.keys())}"
-                    )
+                # _resolve_monitor_key 找不到时会抛 KeyError，含 acc↔oa 兜底
+                self._resolve_monitor_key(val_metrics)
             else:
                 val_metrics = None
                 # if self.val_loader is None:
@@ -580,22 +679,43 @@ class BaseTrainer:
             current_lr = self._step_scheduler(val_metrics)
             self.lr_history.append(current_lr)
 
-            # 训练历史落盘（JSONL 逐条追加，断点续训时据此衔接曲线）
+            # 训练历史落盘（CSV 追加，断点续训时据此衔接曲线）
+            # 列名采用 Lightning 风格 slash 前缀；train/val 行字段互不重叠，
+            # 缺失列由 History 填空字符串
             self.history.append({
-                'phase': 'train', 'epoch': self.current_epoch,
-                'loss': train_results['loss'], 'lr': current_lr,
-                'time': train_results['time'],
+                'epoch': self.current_epoch, 'phase': 'train',
+                'train/loss': train_results['loss'],
+                'train/lr': current_lr,
+                'train/time': train_results['time'],
             })
             if val_metrics is not None:
-                self.history.append({
-                    'phase': 'val', 'epoch': self.current_epoch, **val_metrics,
-                })
+                # val_metrics 含 {loss, acc, time} + metrics.compute() 全部字段；
+                # acc 由 _overall_acc 统一（分类 acc / 分割 oa），映射到 val/acc 列；
+                # 其余汇总指标按任务类型映射到 val/<metric_name> 列，
+                # 逐类指标（precision_i 等）不在 fieldnames 中，会被 History 忽略
+                val_row = {
+                    'epoch': self.current_epoch, 'phase': 'val',
+                    'val/loss': val_metrics['loss'],
+                    'val/acc': val_metrics['acc'],
+                    'val/time': val_metrics['time'],
+                }
+                if self.is_classification:
+                    for k in ('balanced_acc', 'macro_precision', 'macro_recall',
+                              'macro_f1', 'weighted_f1', 'kappa'):
+                        if k in val_metrics:
+                            val_row[f'val/{k}'] = val_metrics[k]
+                else:
+                    for k in ('mpa', 'miou', 'fwiou', 'mf1'):
+                        if k in val_metrics:
+                            val_row[f'val/{k}'] = val_metrics[k]
+                self.history.append(val_row)
 
             # ========== ✅ 验证轮次专属：更新最佳模型 + 早停判断 ==========
             # （先于 last.pt 保存，保证 last.pt 记录的 best_metric 是最新值）
             should_stop = False
             if val_metrics is not None:
-                monitored = val_metrics[self.monitor]
+                # 统一 monitor 取值（slash 前缀风格归一化到 val_metrics 原始键）
+                _, monitored = self._resolve_monitor_key(val_metrics)
                 if self._is_better(monitored):
                     self.best_metric = monitored
                     best_checkpoint = {
@@ -628,7 +748,7 @@ class BaseTrainer:
                 # eval_interval > 1 时 patience 按“验证次数”而非 epoch 数计）
                 if early_stopper is not None:
                     early_stopper(
-                        value=monitored, 
+                        value=monitored,
                         epoch=self.current_epoch)
                     if early_stopper.early_stop:
                         self.logger.info(
@@ -1202,40 +1322,41 @@ class BaseTrainer:
 
     def _restore_history(self, src_log: Path) -> None:
         """
-        断点续训时衔接训练历史（曲线数据由 History 组件以 JSONL 持久化）。
+        断点续训时衔接训练历史（曲线数据由 History 组件以 CSV 持久化）。
 
-        从旧运行目录的 training_log.jsonl 读取记录，按 checkpoint 的 epoch 截断
-        （丢弃比权重快照更晚的“幽灵”记录，如崩溃前多写的日志行、
-        或从较早的 best.pt 恢复时其之后的记录），迁移到本次运行的新日志文件，
+        从旧运行目录的 metrics.csv 读取记录，按 checkpoint 的 epoch 截断
+        （丢弃比权重快照更晚的"幽灵"记录，如崩溃前多写的日志行、
+        或从较早的 best.pt 恢复时其之后的记录），迁移到本次运行的新 CSV 文件，
         并重建内存中的绘图列表，使续训后绘制的曲线完整衔接。
 
         Args:
-            src_log: checkpoint 同目录的 training_log.jsonl 路径，
+            src_log: checkpoint 同目录的 metrics.csv 路径，
                      不存在时保持空历史（仅绘制续训段）
         """
         if not src_log.exists():
             self.logger.warning(
-                "⚠️ No training_log.jsonl found next to checkpoint, "
+                "⚠️ No metrics.csv found next to checkpoint, "
                 "history curves start fresh"
             )
             return
         if src_log.resolve() == self.history.log_path.resolve():
             return  # 同一文件无需迁移（输出目录按时间戳隔离，正常不会发生）
 
-        old = History(src_log)
+        # 旧 CSV 的 fieldnames 仅用于 DictReader 的键约束；实际列名以文件表头为准
+        old = History(src_log, fieldnames=self._build_history_fieldnames())
         old.load()
         records = [r for r in old.records if r.get('epoch', 0) <= self.start_epoch]
         for record in records:
             self.history.append(record)
 
-        # 重建内存绘图列表（与 fit 循环中的追加逻辑对齐）
+        # 重建内存绘图列表（与 fit 循环中的追加逻辑对齐，列名采用 slash 前缀）
         def pick(phase: str, key: str) -> list:
             return [r[key] for r in records if r.get('phase') == phase and key in r]
 
-        self.train_loss_all = pick('train', 'loss')
-        self.lr_history = pick('train', 'lr')
-        self.val_loss_all = pick('val', 'loss')
-        self.val_acc_all = pick('val', 'acc')
+        self.train_loss_all = pick('train', 'train/loss')
+        self.lr_history = pick('train', 'train/lr')
+        self.val_loss_all = pick('val', 'val/loss')
+        self.val_acc_all = pick('val', 'val/acc')
         self.val_epochs = pick('val', 'epoch')
         self.logger.info(
             f"📈 Training history restored from {src_log}: "
@@ -1322,10 +1443,14 @@ class BaseTrainer:
                 # checkpoint 中 epoch 为已完成轮次，fit 从该索引继续（current_epoch = epoch + 1）
                 self.start_epoch = checkpoint.get('epoch', 0) or 0
                 # 恢复历史最佳监控值：优先取新格式 best_metric（last.pt 也会记录）；
-                # 旧 checkpoint 仅有 best_val_acc / val_acc（acc 语义，仅 monitor='acc' 时可复用）
+                # 旧 checkpoint 仅有 best_val_acc / val_acc（acc 语义，仅 monitor='val/acc' 时可复用）
                 ckpt_monitor = checkpoint.get('monitor')
+                # 旧 ckpt 的 monitor 是 'loss'/'acc' 短名，归一化为新风格 'val/loss'/'val/acc'
+                # 以便与当前 self.monitor（强制 slash 前缀）比较
+                if ckpt_monitor is not None and '/' not in ckpt_monitor:
+                    ckpt_monitor = f'val/{ckpt_monitor}'
                 restored_best = checkpoint.get('best_metric')
-                if restored_best is None and self.monitor == 'acc':
+                if restored_best is None and self.monitor == 'val/acc':
                     restored_best = checkpoint.get('best_val_acc')
                     if restored_best is None:
                         restored_best = checkpoint.get('val_acc')
@@ -1339,9 +1464,9 @@ class BaseTrainer:
                     better = min if self.monitor_mode == 'min' else max
                     self.best_metric = better(self.best_metric, restored_best)
 
-                # 恢复训练历史曲线：从 checkpoint 同目录的 training_log.jsonl 迁移
+                # 恢复训练历史曲线：从 checkpoint 同目录的 metrics.csv 迁移
                 # （曲线数据由 History 组件持久化，不入 checkpoint）
-                self._restore_history(Path(checkpoint_fn).parent / 'training_log.jsonl')
+                self._restore_history(Path(checkpoint_fn).parent / 'metrics.csv')
 
                 self.logger.info(
                     f"🔄 Training state restored | "

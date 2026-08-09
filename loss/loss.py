@@ -325,6 +325,7 @@ class IoULoss(nn.Module):
         return 1 - IoU
 
 
+
 class FocalLoss(nn.Module):
     def __init__(self, weight=None, size_average=True, alpha=0.8, gamma=2, smooth=1):
         super().__init__()
@@ -341,4 +342,3 @@ class FocalLoss(nn.Module):
         focal_loss = self.alpha * (1-bce_exp)**self.gamma * bce
                        
         return focal_loss
-

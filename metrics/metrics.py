@@ -468,6 +468,7 @@ def _kappa_from_matrix(matrix: torch.Tensor, eps: float = 1e-10) -> float:
     return ((po - pe) / (1 - pe)).item()
 
 
+
 def separated_kappa(matrix: torch.Tensor, bg_index: int = 0) -> Dict[str, float]:
     """
     分离 Kappa（Separated Kappa, SeK）系数。

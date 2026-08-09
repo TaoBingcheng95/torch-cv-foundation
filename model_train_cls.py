@@ -24,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Training Script')
     parser.add_argument('--device', default='auto', help='Device to use (auto/cpu/cuda/mps)')
     parser.add_argument('--output_dir', default='checkpoints', help='Output directory for checkpoints')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs to train')
+    parser.add_argument('--epochs', default=50, type=int, help='Number of epochs to train')
     parser.add_argument('--batch_size', default=16, type=int, help='Batch size for training')
     parser.add_argument('--learning_rate', default=1e-3, type=float, help='Learning rate for optimizer')
     parser.add_argument('--resume', default='', help='Path to the checkpoint to resume from')
@@ -51,7 +51,7 @@ if __name__ == '__main__':
     
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
-    dm = FashionMNISTDataLoader(root='./data',
+    dm = MNISTDataLoader(root='./data',
                                 download=False,
                                 use_normalize=True,
                                 # val_split=0.2,
@@ -103,6 +103,11 @@ if __name__ == '__main__':
                      optimizer_cfg=optim_cfg,
                      scheduler_cfg=sched_cfg,
                     compile_model=compile_model,
+                    monitor='val/acc',
+                    monitor_mode='max',
+                    eval_interval=1,
+                    early_stop_patience=3,
+                    early_stop_delta=0.01,
                     # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
                     #                        # 日志在 save_dir/tensorboard，查看：
                     #                        # tensorboard --logdir checkpoints
