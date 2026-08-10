@@ -39,7 +39,7 @@ class _NoopHistory:
 
 
 class _NoopVisualizer:
-    """非主进程的可视化器替身：所有绘图/报告调用静默吾临，避免多进程重复写文件"""
+    """非主进程的可视化器替身：所有绘图/报告调用静默跳过，避免多进程重复写文件"""
 
     def __getattr__(self, name):
         return lambda *args, **kwargs: None

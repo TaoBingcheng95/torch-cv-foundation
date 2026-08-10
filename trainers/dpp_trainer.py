@@ -15,13 +15,14 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
 
-from .logger import get_logger
+from .basetrainer import BaseTrainer
 from .ddp_utils import (
     setup_distributed, cleanup_distributed, barrier,
     reduce_value, _NoopHistory, _NoopVisualizer, _DistributedMetrics
 )
+
 from metrics import ClassificationMetric, SegmentationMetric
-from .basetrainer import BaseTrainer
+from utils.logger import get_logger
 
 # 日志配置
 # import logging
@@ -113,6 +114,11 @@ class DDPTrainer(BaseTrainer):
         if not self.distributed:
             super().init_settings()
             return
+
+        # 切换到 DDPTrainer 自己的 logger（分布式模式下区分日志来源）
+        # 必须先于 super().init_settings()：父类据此清理旧 FileHandler 并挂新 FileHandler
+        self.logger = logger
+        self.visualizer.logger = logger
 
         # 1) 用 rank0 的时间戳统一所有进程的输出目录
         #   （各进程 datetime.now() 微小差异会导致目录分裂，
@@ -227,8 +233,11 @@ class DDPTrainer(BaseTrainer):
         results = super().evaluate_epoch()
         if self.distributed:
             results['loss'] = reduce_value(results['loss'], average=True)
-            if self.val_loss_all:
-                self.val_loss_all[-1] = results['loss']
+            # 回写全局 loss 到内存曲线（rank0 绘图 / hparam 用）；
+            # super().evaluate_epoch()._append_val_metrics 已 append 本地值，此处覆盖为全局
+            val_loss_hist = self.val_metrics_history.get('val/loss')
+            if val_loss_hist:
+                val_loss_hist[-1] = results['loss']
         return results
 
 

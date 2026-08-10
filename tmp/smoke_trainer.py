@@ -49,7 +49,10 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
     # 断言：训练历史与 lr 记录正常（训练阶段只记损失，不算指标）
     assert len(trainer.train_loss_all) <= epochs and len(trainer.train_loss_all) == len(trainer.lr_history)
     # 断言：验证次数与 eval_interval 匹配（val_epochs 记录实际验证轮次）
-    assert len(trainer.val_epochs) == len(trainer.val_loss_all) == len(trainer.val_acc_all)
+    # 验证指标统一存入 val_metrics_history（键名与 metrics.csv 列名一致）
+    val_loss_hist = trainer.val_metrics_history.get('val/loss', [])
+    val_acc_hist = trainer.val_metrics_history.get('val/acc', [])
+    assert len(trainer.val_epochs) == len(val_loss_hist) == len(val_acc_hist)
     if eval_interval > 1:
         expected = [e for e in range(1, len(trainer.train_loss_all) + 1)
                     if e % eval_interval == 0 or e == epochs]
@@ -57,7 +60,7 @@ def run_case(name, optimizer_cfg, scheduler_cfg, epochs=2, eval_interval=1):
     # 断言：混淆矩阵为 numpy 且尺寸正确
     assert trainer.cnf_matrix is not None and trainer.cnf_matrix.shape == (3, 3)
     # 断言：产物文件齐全
-    for fn in ['best.pt', 'last.pt', 'acc_loss.png', 'lr_curve.png',
+    for fn in ['best.pt', 'last.pt', 'loss_curve.png', 'val_metrics.png', 'lr_curve.png',
                'confusion_matrix.png', 'confusion_matrix_normalized.png']:
         assert (trainer.save_dir / fn).exists(), f"missing {fn}"
     # 断言：fit 结束后内存模型已恢复为 best.pt 的权重（早停时尤其关键）

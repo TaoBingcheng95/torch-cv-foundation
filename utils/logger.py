@@ -8,7 +8,7 @@
     - 幂等/单例获取：get_logger 复用同名 logger，重复配置不会叠加 handler
 
 典型用法：
-    >>> from trainers.logger import LOGGER, get_logger, add_file_handler
+    >>> from utils.logger import LOGGER, get_logger, add_file_handler
     >>> LOGGER.info("start training")                 # 直接使用全局 logger
     >>> logger = get_logger("MyModule")               # 获取（或惰性创建）具名 logger
     >>> add_file_handler(logger, "output/train.log")  # 运行期确定目录后追加文件日志

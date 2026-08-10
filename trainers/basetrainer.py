@@ -21,11 +21,11 @@ from torch.amp import GradScaler
 
 from .visualizer import TrainingVisualizer
 from .utils import EarlyStopping, History
-from .logger import get_logger, add_file_handler
 
 from metrics import ClassificationMetric, SegmentationMetric
 from optimizers import build_optimizer, build_scheduler, clip_grad_norm
 from utils.hardware import select_device, collect_hardware_report
+from utils.logger import get_logger, add_file_handler
 
 # 日志配置
 # import logging
