@@ -24,7 +24,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Training Script')
     parser.add_argument('--device', default='auto', help='Device to use (auto/cpu/cuda/mps)')
     parser.add_argument('--output_dir', default='checkpoints', help='Output directory for checkpoints')
-    parser.add_argument('--epochs', default=50, type=int, help='Number of epochs to train')
+    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs to train')
     parser.add_argument('--batch_size', default=16, type=int, help='Batch size for training')
     parser.add_argument('--learning_rate', default=1e-3, type=float, help='Learning rate for optimizer')
     parser.add_argument('--resume', default='', help='Path to the checkpoint to resume from')
@@ -51,7 +51,7 @@ if __name__ == '__main__':
     
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
-    dm = MNISTDataLoader(root='./data',
+    dm = CIFAR10DataLoader(root='./data',
                                 download=False,
                                 use_normalize=True,
                                 # val_split=0.2,
@@ -66,7 +66,7 @@ if __name__ == '__main__':
     x, y = next(iter(train_dl))
     print(x.shape, y.shape)
 
-    model = LeNet5(num_classes=num_classes)
+    model = LeNet5(in_channels=3, num_classes=num_classes)
     # model = build_vgg(arch='vgg11')
     criterion = CEWithLogitsLoss()  # nn.CrossEntropyLoss()
     # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
@@ -106,7 +106,7 @@ if __name__ == '__main__':
                     monitor='val/acc',
                     monitor_mode='max',
                     eval_interval=1,
-                    early_stop_patience=3,
+                    early_stop_patience=5,
                     early_stop_delta=0.01,
                     # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
                     #                        # 日志在 save_dir/tensorboard，查看：

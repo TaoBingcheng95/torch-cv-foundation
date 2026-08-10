@@ -9,8 +9,10 @@
 
 使用示例：
     viz = TrainingVisualizer(save_dir='./output', class_names=['cat', 'dog'])
-    viz.plot_acc_loss(train_loss, val_loss, val_acc, val_epochs,
-                      save_path='./output/acc_loss.png')
+    viz.plot_loss_curve(train_loss, val_loss, val_epochs,
+                        save_path='./output/loss_curve.png')
+    viz.plot_val_metrics({'val/acc': acc_list, 'val/macro_f1': f1_list},
+                         val_epochs, save_path='./output/val_metrics.png')
     viz.plot_confusion_matrix(cm, normalize=True, save_path='./output/cm.png')
 """
 
@@ -78,54 +80,116 @@ class TrainingVisualizer:
             return str(self.save_dir / default_name)
         return None
 
-    def plot_acc_loss(self,
-                      train_loss: Sequence[float],
-                      val_loss: Sequence[float],
-                      val_acc: Sequence[float],
-                      val_epochs: Optional[Sequence[int]] = None,
-                      save_path: Optional[str] = None) -> None:
+    def plot_loss_curve(self,
+                       train_loss: Sequence[float],
+                       val_loss: Sequence[float],
+                       val_epochs: Optional[Sequence[int]] = None,
+                       save_path: Optional[str] = None) -> None:
         """
-        绘制训练/验证损失曲线和验证准确率曲线。
-
-        训练阶段不计算精度指标，因此准确率子图仅展示验证集曲线。
+        绘制训练/验证损失对比曲线（单图双线）。
 
         Args:
             train_loss: 每个 epoch 的训练损失
             val_loss: 每次验证的损失
-            val_acc: 每次验证的准确率
-            val_epochs: 每次验证对应的 epoch（eval_interval > 1 时曲线横轴对齐用；
+            val_epochs: 每次验证对应的 epoch（eval_interval > 1 时横轴对齐用；
                         None 时按 1..len(val_loss) 顺序排布）
-            save_path: 保存路径（None 时使用 save_dir/acc_loss.png）
+            save_path: 保存路径（None 时使用 save_dir/loss_curve.png）
         """
         if not (train_loss and val_loss):
             raise ValueError("Loss history is empty, run fit() first.")
         if val_epochs is None:
             val_epochs = list(range(1, len(val_loss) + 1))
 
-        plt.figure(figsize=(12, 4))
-
-        plt.subplot(1, 2, 1)
+        plt.figure(figsize=(10, 6))
         plt.plot(range(1, len(train_loss) + 1),
-                 train_loss, 'ro-', label='Train Loss')
-        plt.plot(val_epochs, val_loss, 'bs-', label='Val Loss')
+                 train_loss, 'ro-', label='Train Loss', linewidth=1.5)
+        plt.plot(val_epochs, val_loss, 'bs-', label='Val Loss', linewidth=1.5)
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title('Train and Validation Loss')
-        plt.legend()
-        plt.grid(True)
-
-        plt.subplot(1, 2, 2)
-        plt.plot(val_epochs, val_acc, 'bs-', label='Val Acc')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.title('Validation Accuracy')
-        plt.legend()
-        plt.grid(True)
-
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        save_path = self._resolve_path(save_path, 'acc_loss.png')
+
+        save_path = self._resolve_path(save_path, 'loss_curve.png')
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            self.logger.info(f"📈 Loss curve saved to {save_path}")
+        plt.close()
+
+    def plot_val_metrics(self,
+                        metrics: Dict[str, Sequence[float]],
+                        val_epochs: Sequence[int],
+                        save_path: Optional[str] = None,
+                        smooth: Optional[float] = None,
+                        figsize: Tuple[float, float] = (10, 6)) -> None:
+        """
+        绘制验证指标曲线（单图多线，共享 X/Y 轴）。
+
+        所有验证指标值域通常在 [0, 1]，共享 Y 轴便于横向对比趋势。
+        每条线在末端标注当前值，图例用键名去掉 'val/' 前缀。
+
+        Args:
+            metrics: 指标名 → 数值列表。键名用 CSV 列名风格
+                     （如 'val/acc'、'val/macro_f1'、'val/miou'）
+            val_epochs: 每次验证对应的 epoch
+            save_path: 保存路径（None 时使用 save_dir/val_metrics.png）
+            smooth: 可选 EMA 平滑系数（0~1），None 不平滑。
+                    平滑后原始数据用淡色底线保留
+            figsize: 画布大小
+        """
+        if not metrics:
+            return
+        # 过滤掉空列表或长度与 val_epochs 不一致的指标
+        valid = {k: list(v) for k, v in metrics.items()
+                 if v and len(v) == len(val_epochs)}
+        if not valid:
+            self.logger.warning("⚠️ No valid metrics to plot (length mismatch or empty)")
+            return
+
+        plt.figure(figsize=figsize)
+        # 线型循环：实线 / 虚线 / 点划线 / 点线，避免仅靠颜色区分
+        line_styles = ['-', '--', '-.', ':']
+        colors = plt.cm.tab10.colors  # 10 色循环
+
+        for idx, (name, values) in enumerate(valid.items()):
+            label = name.split('/')[-1]  # 去掉 'val/' 前缀
+            color = colors[idx % len(colors)]
+            ls = line_styles[idx % len(line_styles)]
+
+            if smooth and 0 < smooth < 1:
+                # EMA 平滑：smoothing factor = smooth
+                ema = [values[0]]
+                for v in values[1:]:
+                    ema.append(smooth * ema[-1] + (1 - smooth) * v)
+                # 原始数据用淡色底线
+                plt.plot(val_epochs, values, color=color, alpha=0.25, linewidth=1)
+                plt.plot(val_epochs, ema, color=color, linestyle=ls,
+                         linewidth=1.8, label=label)
+            else:
+                plt.plot(val_epochs, values, color=color, linestyle=ls,
+                         linewidth=1.5, label=label)
+
+            # 末端标注当前值
+            if values:
+                last_epoch = val_epochs[-1]
+                last_val = values[-1]
+                plt.annotate(f'{last_val:.3f}',
+                             xy=(last_epoch, last_val),
+                             xytext=(5, 0), textcoords='offset points',
+                             fontsize=8, color=color)
+
+        plt.xlabel('Epoch')
+        plt.ylabel('Value')
+        plt.title('Validation Metrics')
+        plt.legend(loc='best', framealpha=0.9)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        save_path = self._resolve_path(save_path, 'val_metrics.png')
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            self.logger.info(f"📈 Validation metrics curve saved to {save_path}")
         plt.close()
 
     def plot_lr_history(self,
@@ -247,13 +311,13 @@ class TrainingVisualizer:
                           confusion_matrix: np.ndarray,
                           elapsed_time: float,
                           speed: float,
-                          is_classification: bool = True) -> str:
+                          is_classification: bool = True,
+                          save_path: Optional[str] = None) -> str:
         """
         输出格式化的测试报告。
 
-        报告先组装为完整字符串，再以单条多行日志记录经 self.logger 输出，
-        因此会同时出现在终端与日志文件（如 train.log）中，且文件内报告块
-        仅首行带时间戳前缀，内容保持对齐。
+        报告先组装为完整字符串，写入独立报告文件（test_report.txt），
+        同时在 train.log 中打印一行摘要，避免日志文件被大段报告刷屏。
 
         Args:
             results: metrics.compute() 返回的指标字典
@@ -264,9 +328,11 @@ class TrainingVisualizer:
             elapsed_time: 测试耗时（秒）
             speed: 测试吞吐（samples/sec）
             is_classification: 任务类型，决定汇总指标的打印集合
+            save_path: 报告文件保存路径；None 时不写文件
+                       （由调用方传 save_dir/test_report.txt）
 
         Returns:
-            报告文本（不含日志前缀），供调用方另作他用（如写入独立报告文件）
+            报告文本（不含日志前缀），供调用方另作他用
         """
         num_classes = confusion_matrix.shape[0]
         lines: List[str] = []
@@ -319,6 +385,21 @@ class TrainingVisualizer:
         lines.append("=" * 60)
 
         report = "\n".join(lines)
-        # 首行换行：让报告块从日志前缀的下一行开始，保持整块对齐
-        self.logger.info("\n%s", report)
+
+        # 写入独立报告文件
+        if save_path:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write(report + '\n')
+            self.logger.info(f"📄 Test report saved to {save_path}")
+
+        # train.log 只打印一行摘要，避免大段报告刷屏
+        if is_classification:
+            acc = fmt_value(results.get('acc'), '.2f', scale=100, suffix='%')
+            mf1 = fmt_value(results.get('macro_f1'), '.2f', scale=100, suffix='%')
+            self.logger.info(f"🧪 Test completed | Acc: {acc} | Macro F1: {mf1}")
+        else:
+            oa = fmt_value(results.get('oa'), '.2f', scale=100, suffix='%')
+            miou = fmt_value(results.get('miou'), '.2f', scale=100, suffix='%')
+            self.logger.info(f"🧪 Test completed | OA: {oa} | mIoU: {miou}")
+
         return report

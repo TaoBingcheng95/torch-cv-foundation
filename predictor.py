@@ -37,7 +37,6 @@ if __name__ == "__main__":
     std = torch.Tensor(IMAGENET_STD)
     mean = torch.Tensor(IMAGENET_MEAN)
 
-
     img = 'data\\VOCdevkit\\VOC2012\\JPEGImages\\2007_000033.jpg'
     img = Image.open(img).convert('RGB')
     img = np.array(img)

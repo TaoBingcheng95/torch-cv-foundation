@@ -67,7 +67,7 @@ class BaseTrainer:
                  compile_model:bool = False, 
                  use_amp: bool = False,  # 混合精度训练（AMP）
                  max_grad_norm: Optional[float] = None,  # 梯度裁剪
-                 early_stop_patience: Optional[int] = 3,  # 早停容忍次数（None 表示禁用早停）
+                 early_stop_patience: Optional[int] = 5,  # 早停容忍次数（None 表示禁用早停）
                  early_stop_delta: float = 0.0,  # 早停判定的最小改善阈值
                  monitor: str = 'val/loss',  # 统一监控指标：best.pt / 早停 / Plateau 共用
                  monitor_mode: str = 'auto',  # 'auto' | 'min' | 'max'
@@ -209,8 +209,9 @@ class BaseTrainer:
         # 全新训练应新建 Trainer 实例）
         self.metrics = metrics
         self.train_loss_all = []
-        self.val_loss_all = []
-        self.val_acc_all = []
+        # val_metrics_history: 验证指标历史，键名与 metrics.csv 列名一致
+        # （'val/loss'、'val/acc'、'val/macro_f1' 等）。绘图时按需取用
+        self.val_metrics_history: Dict[str, list] = {}
         self.val_epochs = []  # 记录每次验证对应的 epoch（eval_interval > 1 时绘图用）
         self.lr_history = []
         self.cnf_matrix = None
@@ -786,14 +787,28 @@ class BaseTrainer:
             self.logger.warning("⚠️ best.pt not found, keeping last-epoch weights")
 
         # 可视化训练曲线（绘图逻辑见 trainers/visualizer.py，训练数据显式传入）
-        if self.train_loss_all and self.val_loss_all:
-            self.visualizer.plot_acc_loss(
+        # 1. loss_curve：训练流程图（train loss + val loss 对比）
+        val_loss_all = self.val_metrics_history.get('val/loss', [])
+        if self.train_loss_all and val_loss_all:
+            self.visualizer.plot_loss_curve(
                 train_loss=self.train_loss_all,
-                val_loss=self.val_loss_all,
-                val_acc=self.val_acc_all,
+                val_loss=val_loss_all,
                 val_epochs=self.val_epochs,
-                save_path=os.path.join(self.save_dir, 'acc_loss.png'),
+                save_path=os.path.join(self.save_dir, 'loss_curve.png'),
             )
+        # 2. val_metrics：验证指标图（单图多线，acc/f1/precision/recall 等）
+        #    排除 val/loss（已在 loss_curve 中绘制）和 val/time（不属于质量指标）
+        val_metrics_for_plot = {
+            k: v for k, v in self.val_metrics_history.items()
+            if k not in ('val/loss', 'val/time') and len(v) == len(self.val_epochs)
+        }
+        if val_metrics_for_plot and self.val_epochs:
+            self.visualizer.plot_val_metrics(
+                metrics=val_metrics_for_plot,
+                val_epochs=self.val_epochs,
+                save_path=os.path.join(self.save_dir, 'val_metrics.png'),
+            )
+        # 3. lr_curve：学习率曲线
         if self.lr_history:
             self.visualizer.plot_lr_history(
                 self.lr_history,
@@ -805,10 +820,11 @@ class BaseTrainer:
         final_metrics = {}
         if self.best_metric not in (float('inf'), float('-inf')):
             final_metrics[f'hparam/best_{self.monitor}'] = self.best_metric
-        if self.val_loss_all:
-            final_metrics['hparam/final_val_loss'] = self.val_loss_all[-1]
-        if self.val_acc_all:
-            final_metrics['hparam/final_val_acc'] = self.val_acc_all[-1]
+        if val_loss_all:
+            final_metrics['hparam/final_val_loss'] = val_loss_all[-1]
+        val_acc_all = self.val_metrics_history.get('val/acc', [])
+        if val_acc_all:
+            final_metrics['hparam/final_val_acc'] = val_acc_all[-1]
         if final_metrics:
             self.log_hparams(final_metrics)
 
@@ -970,7 +986,48 @@ class BaseTrainer:
             return results['acc']
         return results.get('oa', 0.0)
 
- 
+
+    def _append_val_metrics(self, avg_loss: float, val_acc: float,
+                            results: Dict[str, float], val_time: float) -> None:
+        """
+        将本轮验证的指标追加到 val_metrics_history。
+
+        统一用 CSV 列名风格（slash 前缀）存储：
+            'val/loss'、'val/acc'、'val/time'
+            + metrics.compute() 返回的汇总指标加 'val/' 前缀
+              （分类如 'val/macro_f1'，分割如 'val/miou'）
+        逐类指标（如 'precision_0'）不入内存 dict，避免膨胀；
+        其值仍由 CSV 和 TensorBoard 持久化。
+
+        Args:
+            avg_loss: 验证平均损失
+            val_acc: 总体精度（分类 acc / 分割 oa 已统一）
+            results: metrics.compute() 返回的完整指标字典
+            val_time: 验证耗时（秒）
+        """
+        # 首次调用时初始化各指标的列表
+        def _ensure(key):
+            if key not in self.val_metrics_history:
+                self.val_metrics_history[key] = []
+
+        # 固定列
+        _ensure('val/loss'); self.val_metrics_history['val/loss'].append(avg_loss)
+        _ensure('val/acc');  self.val_metrics_history['val/acc'].append(val_acc)
+        _ensure('val/time'); self.val_metrics_history['val/time'].append(val_time)
+
+        # 汇总指标（排除逐类指标，避免 dict 膨胀）
+        for key, value in results.items():
+            # 跳过逐类指标（键名以 '_数字' 结尾，如 'precision_0'）
+            if key.split('_')[-1].isdigit():
+                continue
+            # 跳过 acc/oa（已统一为 val/acc）和 loss（已记为 val/loss）
+            if key in ('acc', 'oa', 'loss'):
+                continue
+            csv_key = f'val/{key}'
+            _ensure(csv_key)
+            self.val_metrics_history[csv_key].append(value)
+
+
     @torch.no_grad()
     def evaluate_epoch(self) -> Dict[str, Any]:
         """
@@ -1050,9 +1107,9 @@ class BaseTrainer:
             'samples_per_sec': samples_per_sec,
         }, self.current_epoch, 'val/')
         
-        # 更新历史列表（val_epochs 记录对应轮次，eval_interval > 1 时绘图对齐用）
-        self.val_loss_all.append(avg_loss)
-        self.val_acc_all.append(val_acc)
+        # 更新历史 dict（val_epochs 记录对应轮次，eval_interval > 1 时绘图对齐用）
+        # 所有指标统一存入 val_metrics_history，键名与 metrics.csv 列名一致
+        self._append_val_metrics(avg_loss, val_acc, results, val_time)
         self.val_epochs.append(self.current_epoch)
         self.val_metrics_result = results  # 保留详细结果供后续分析
         
@@ -1229,6 +1286,7 @@ class BaseTrainer:
             self.visualizer.print_test_report(
                 results, cnf_matrix, test_time, samples_per_sec,
                 is_classification=self.is_classification,
+                save_path=str(self.save_dir / 'test_report.txt'),
             )
 
         # 混淆矩阵可视化（随测试一起从 fit() 移入，仅分类任务绘制）
@@ -1355,13 +1413,26 @@ class BaseTrainer:
 
         self.train_loss_all = pick('train', 'train/loss')
         self.lr_history = pick('train', 'train/lr')
-        self.val_loss_all = pick('val', 'val/loss')
-        self.val_acc_all = pick('val', 'val/acc')
         self.val_epochs = pick('val', 'epoch')
+
+        # 重建 val_metrics_history：扫描所有 'val/' 前缀的列，按列名收集
+        # （列名集合由 _build_history_fieldnames 在 init_settings 时确定，
+        #   这里只需遍历 val 记录里出现的所有 val/* 键）
+        self.val_metrics_history = {}
+        val_records = [r for r in records if r.get('phase') == 'val']
+        if val_records:
+            # 从第一条 val 记录收集所有 'val/' 前缀键（CSV 表头已统一，
+            # 后续记录键集合一致；缺失值由 CSV 的空字符串表示，已转为 None）
+            val_keys = [k for k in val_records[0].keys() if k.startswith('val/')]
+            for k in val_keys:
+                self.val_metrics_history[k] = [
+                    r[k] for r in val_records if k in r and r[k] is not None
+                ]
         self.logger.info(
             f"📈 Training history restored from {src_log}: "
             f"{len(self.train_loss_all)} train epochs, "
-            f"{len(self.val_epochs)} validation rounds"
+            f"{len(self.val_epochs)} validation rounds, "
+            f"{len(self.val_metrics_history)} val metrics"
         )
 
 

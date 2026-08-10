@@ -31,7 +31,7 @@ class LeNet5(nn.Module):
     Args:
         num_classes: 分类类别数，MNIST 默认为 10（数字 0-9）
     """
-    def __init__(self, num_classes: int = 10) -> None:
+    def __init__(self, in_channels: int = 1, num_classes: int = 10) -> None:
         super().__init__()
 
         # ============================================================
@@ -45,7 +45,7 @@ class LeNet5(nn.Module):
         #   ReLU:    非线性激活
         #   MaxPool: 2×2 下采样, 28×28 → 14×14
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=2),
+            nn.Conv2d(in_channels, 6, kernel_size=5, stride=1, padding=2),
             nn.BatchNorm2d(6),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
