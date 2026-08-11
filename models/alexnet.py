@@ -19,6 +19,8 @@ AlexNet — 深度学习视觉革命的起点 (Krizhevsky et al., 2012)
 参考论文: "ImageNet Classification with Deep Convolutional Neural Networks"
 """
 
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 

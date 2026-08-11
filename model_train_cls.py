@@ -48,7 +48,6 @@ if __name__ == '__main__':
 
     optimal_workers = get_smart_num_workers()
     pin_memory = auto_pin_memory(device, num_workers=optimal_workers)
-    
     print(f"根据硬件环境，推荐的基准 num_workers 值为: {optimal_workers}, pin_memory={pin_memory}")
 
     dm = CIFAR10DataLoader(root='./data',
