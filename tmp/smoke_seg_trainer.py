@@ -15,8 +15,10 @@ from dataset.voc_dataset import VOCSegmentationDataLoader
 from models.deeplab3plus import DeepLabV3Plus
 from models.backbone import ResNet18Encoder
 from trainers import BaseTrainer
+from optimizers import build_optimizer, build_scheduler
 from utils.hardware import select_device
 from loss import CEWithLogitsLoss
+from metrics.general import MulticlassSegmentationMetric
 
 torch.set_float32_matmul_precision('medium')
 
@@ -47,6 +49,11 @@ if __name__ == '__main__':
     sched_cfg = {"type": "warmup_cosine",
                  "total_epochs": epochs, "warmup_epochs": 1}
 
+    optimizer = build_optimizer(model, optim_cfg)
+    scheduler = build_scheduler(optimizer, sched_cfg,
+                                total_epochs=epochs,
+                                steps_per_epoch=len(train_dl))
+
     tt = BaseTrainer(model=model,
                      device=device,
                      output_dir='tmp/smoke_ckpt',
@@ -56,10 +63,12 @@ if __name__ == '__main__':
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
                      criterion=criterion,
-                     optimizer_cfg=optim_cfg,
-                     scheduler_cfg=sched_cfg,
+                     metric=MulticlassSegmentationMetric(
+                         num_classes=num_classes, ignore_index=255),
+                     optimizer=optimizer,
+                     scheduler=scheduler,
                      is_classification=False,
-                     monitor='miou',
+                     monitor='val/iou',
                      eval_interval=1,
                      class_names=dm.classes,
                      )

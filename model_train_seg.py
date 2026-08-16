@@ -6,9 +6,11 @@ from dataset import auto_pin_memory, get_smart_num_workers
 from dataset.voc_dataset import VOCSegmentationDataLoader
 from models.deeplab3plus import DeepLabV3Plus
 from models.backbone import ResNet18Encoder, ResNet50Encoder
-from trainers import BaseTrainer
+from trainers import BaseTrainer, TrainConfig
+from optimizers import build_optimizer, build_scheduler
 from utils.hardware import select_device
 from loss import CEDiceLoss
+from metrics.general import MulticlassSegmentationMetric
 
 torch.set_float32_matmul_precision('medium')
 # os.environ['TORCHDYNAMO_VERBOSE'] = '1'
@@ -67,42 +69,62 @@ if __name__ == '__main__':
     # CE + Dice 组合损失：CE 保证逐像素稳定收敛，Dice 直接优化区域重叠（与 miou 监控指标对齐）；
     # ignore_index=255 忽略 VOC 的 void 边界像素
     criterion = CEDiceLoss(ce_weight=1.0, dice_weight=1.0)
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=10, factor=0.1)
-    optim_cfg = {
-        "type": "adamw",
-        "lr": learning_rate, # 5e-4,
-        "weight_decay": 1e-4,
-        "betas": (0.9, 0.999),}
-    # optimizer = build_optimizer(model, optim_cfg)
-    # sched_cfg = {
-    #     "type": "reduceLROnPlateau",
-    #     "mode": "min",  # 与 BaseTrainer 默认 monitor='acc'（max 方向）对齐
-    #     "patience": 5,
-    #     "factor": 0.5,}
-    sched_cfg =  {"type": "warmup_cosine",
-                  "total_epochs": epochs, 
-                  "warmup_epochs": 5}
-    # scheduler = build_scheduler(optimizer, sched_cfg)
 
-    # compile model for faster training with pytorch 2.0
-    compile_model= args.compile
+    # ── 训练参数配置（TrainConfig 作为统一参数记录器）──────────────────
+    cfg = TrainConfig(
+        max_epochs=epochs,
+        batch_size=args.batch_size,
+        num_workers=optimal_workers,
+        work_dir=output_dir,
+        optim_cfg={
+            'type': 'adamw',
+            'lr': learning_rate,
+            'weight_decay': 1e-4,
+            'betas': (0.9, 0.999),
+        },
+        # 备选: Plateau 调度器（需与 monitor_mode='min' 对齐）
+        # sched_cfg={'type': 'plateau', 'mode': 'min', 'patience': 5, 'factor': 0.5},
+        sched_cfg={
+            'type': 'warmup_cosine',
+            'total_epochs': epochs,
+            'warmup_epochs': 5,
+        },
+        monitor='val/iou',
+        monitor_mode='max',
+        eval_interval=1,  # check_val_every_n_epoch=1
+        early_stop_patience=5,
+        early_stop_delta=0.01,
+        min_epochs=10,
+    )
+
+    # 外部实例化优化器与调度器，与 model/criterion/metric 生命周期一致
+    optimizer = build_optimizer(model, cfg.optim_cfg)
+    scheduler = build_scheduler(optimizer, cfg.sched_cfg,
+                                total_epochs=cfg.max_epochs,
+                                steps_per_epoch=len(train_dl))
+
+    metric = MulticlassSegmentationMetric(num_classes=num_classes, ignore_index=255)
 
     tt = BaseTrainer(model=model,
                      device=device,
-                     output_dir=output_dir,
-                     epochs=epochs,
+                     output_dir=cfg.work_dir,
+                     epochs=cfg.max_epochs,
                      num_classes=num_classes,
                      train_dataloader=train_dl,
                      val_dataloader=val_dl,
                      test_dataloader=test_dl,
                      criterion=criterion,
-                     optimizer_cfg=optim_cfg,
-                     scheduler_cfg=sched_cfg,
-                     compile_model=compile_model,
+                     metric=metric,
+                     optimizer=optimizer,
+                     scheduler=scheduler,
+                     compile_model=args.compile,
                      is_classification=False,
-                     monitor='miou',
-                     eval_interval=1,
+                     monitor=cfg.monitor,
+                     monitor_mode=cfg.monitor_mode,
+                     eval_interval=cfg.eval_interval,
+                     early_stop_patience=cfg.early_stop_patience,
+                     early_stop_delta=cfg.early_stop_delta,
+                     min_epochs=cfg.min_epochs,
                      class_names=dm.classes,
                      # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
                      #                        # 日志在 save_dir/tensorboard，查看：

@@ -13,7 +13,7 @@ from torch import distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.tensorboard import SummaryWriter
+from .tb_logger import TensorBoardLogger
 
 from .basetrainer import BaseTrainer
 from .ddp_utils import (
@@ -48,7 +48,8 @@ class DDPTrainer(BaseTrainer):
       DDP 不支持 MPS），传入的 device 参数在分布式模式下被覆盖
     - 数据：自动用 DistributedSampler 重建 train/val/test loader（分片），
       每轮训练前 sampler.set_epoch 保证各 epoch shuffle 不同
-    - 聚合：混淆矩阵类指标在 compute 前 all_reduce（全局精确）；
+    - 聚合：原生 PyTorch 指标类（ClassificationMetric / SegmentationMetric）
+      在 compute 前显式 all_reduce 混淆矩阵（全局精确）；
       train/val/test 的 loss 跨 rank 取均值
     - 落盘：仅 rank0 写 checkpoint / 日志文件 / 曲线图 / TensorBoard，
       输出目录时间戳由 rank0 广播，所有 rank 共享同一目录路径
@@ -151,10 +152,10 @@ class DDPTrainer(BaseTrainer):
             # （与父类 init_settings 的非落盘部分对齐）
             self.pbar_disable = True
             self.logger.setLevel(logging.WARNING)
-            self.writer = None
+            self.tb_logger = TensorBoardLogger(log_dir='', enabled=False)
             self.history = _NoopHistory()
             self.visualizer = _NoopVisualizer()
-            self.init_optim_scheduler(self.optimizer_cfg, self.scheduler_cfg)
+            self._detect_scheduler_type()
             if self.resume:
                 self.load_model(self.resume, resume=True)
             if self.metrics is None:
@@ -168,8 +169,12 @@ class DDPTrainer(BaseTrainer):
                 except Exception:
                     pass  # 主进程已记录 warning，此处静默回退
 
-        # 5) 指标分布式聚合：compute 前 all_reduce 混淆矩阵，
-        #    各 rank 得到一致的全局指标（best/早停决策天然同步）
+        # 5) 指标分布式聚合：原生 PyTorch 指标类自带 all_reduce()，
+        #    _DistributedMetrics 包装器在 compute/per_class_metrics 前自动调用；
+        #    state 必须在通信设备上（NCCL 要求 CUDA tensor），
+        #    否则 all_reduce 会在 CPU 上调用集合通信而报错；
+        #    主进程已在 super().init_settings() 内 .to，此处覆盖非主进程分支
+        self.metrics = self.metrics.to(self.device)
         self.metrics = _DistributedMetrics(self.metrics)
         barrier()
 
@@ -229,7 +234,13 @@ class DDPTrainer(BaseTrainer):
 
 
     def evaluate_epoch(self) -> Dict[str, Any]:
-        """验证一轮：acc 等指标已由 _DistributedMetrics 全局聚合，此处聚合 loss"""
+        """验证一轮：先 all_reduce 混淆矩阵，再让父类 compute 全局指标"""
+        if self.distributed and hasattr(self._val_metric, 'all_reduce'):
+            # 父类 evaluate_epoch 内部 self.metrics = self._val_metric 会绕过
+            # _DistributedMetrics 包装器，因此需在此显式 all_reduce；
+            # reset() 后首次 compute 前调用一次即可，all_reduce 原地修改矩阵
+            # torchmetrics 指标无 all_reduce()，其 compute() 自动同步 DDP
+            self._val_metric.all_reduce()
         results = super().evaluate_epoch()
         if self.distributed:
             results['loss'] = reduce_value(results['loss'], average=True)
@@ -282,6 +293,11 @@ class DDPTrainer(BaseTrainer):
                 save_error_index = False
             if not self.is_main:
                 report_results = False  # 报告只由 rank0 打印
+            # 父类 test 内部 self.metrics = self._test_metric 会绕过
+            # _DistributedMetrics 包装器，因此需在此显式 all_reduce
+            # torchmetrics 指标无 all_reduce()，其 compute() 自动同步 DDP
+            if hasattr(self._test_metric, 'all_reduce'):
+                self._test_metric.all_reduce()
 
         results = super().test(
             report_results=report_results,
@@ -293,6 +309,8 @@ class DDPTrainer(BaseTrainer):
             results['loss'] = reduce_value(results['loss'], average=True)
             results['samples'] = int(reduce_value(float(results['samples']),
                                                   average=False))
+            # 混淆矩阵已在 basetrainer.test() 中通过 .confusion_matrix 属性
+            # 获取（内部触发 all_reduce），此处无需重复计算
         return results
 
 

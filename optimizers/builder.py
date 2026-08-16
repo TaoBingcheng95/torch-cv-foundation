@@ -111,8 +111,7 @@ def _build_param_groups(model: nn.Module,
     ]
 
 
-def build_optimizer(*,
-                    model: nn.Module,
+def build_optimizer(model: nn.Module,
                     cfg: Optional[Dict[str, Any]] = None) -> optim.Optimizer:
     """
     根据配置字典构建优化器。

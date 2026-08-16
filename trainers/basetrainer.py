@@ -1,29 +1,27 @@
 
 import logging
 import os
-import re
 from pathlib import Path
 import time
 from datetime import datetime
 import json
 from typing import Dict, Optional, Any, List, Tuple, Union
-
 from tqdm import tqdm
 
 import torch
 from torch import nn
 from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from .tb_logger import TensorBoardLogger
 # 混合精度训练
 from torch.amp import autocast
 from torch.amp import GradScaler
 
-from .visualizer import TrainingVisualizer
+from .visualizer import Visualizer
+from .report import print_test_report
 from .utils import EarlyStopping, History
 
-from metrics import ClassificationMetric, SegmentationMetric
-from optimizers import build_optimizer, build_scheduler, clip_grad_norm
+from optimizers import clip_grad_norm
 from utils.hardware import select_device, collect_hardware_report
 from utils.logger import get_logger, add_file_handler
 
@@ -59,16 +57,17 @@ class BaseTrainer:
                  log_interval: int = 5,
                  eval_interval: int = 1,  # 每隔多少个 epoch 验证一次（1 = 每轮都验证）
                  device: Union[str, torch.device] = 'auto',  # 'auto' | 'cuda' | 'cpu' | 'mps'，也可直接传 torch.device
-                 optimizer_cfg: Optional[Dict[str, Any]] = None,
-                 scheduler_cfg: Optional[Dict[str, Any]] = None,
+                 optimizer: Optional[torch.optim.Optimizer] = None,
+                 scheduler: Optional[lr_scheduler._LRScheduler] = None,
                  criterion: Optional[nn.Module] = None,  # None 时默认 CrossEntropyLoss
-                 metrics = None,
+                 metric = None,
                  resume: Optional[str]=None,
                  compile_model:bool = False, 
                  use_amp: bool = False,  # 混合精度训练（AMP）
                  max_grad_norm: Optional[float] = None,  # 梯度裁剪
                  early_stop_patience: Optional[int] = 5,  # 早停容忍次数（None 表示禁用早停）
                  early_stop_delta: float = 0.0,  # 早停判定的最小改善阈值
+                 min_epochs: int = 0,  # 最小训练轮数（早停保护期内不触发）
                  monitor: str = 'val/loss',  # 统一监控指标：best.pt / 早停 / Plateau 共用
                  monitor_mode: str = 'auto',  # 'auto' | 'min' | 'max'
                  output_dir: str='./output',
@@ -76,10 +75,8 @@ class BaseTrainer:
         """
         初始化训练器
         
-        :param optimizer_cfg: 优化器配置字典
-            示例: {"type": "adamw", "lr": 1e-3, "weight_decay": 1e-4, "momentum": 0.9}
-        :param scheduler_cfg: 调度器配置字典（None 表示不使用）
-            示例: {"type": "reduceLROnPlateau", "mode": "min", "patience": 5, "factor": 0.5}
+        :param optimizer: 已实例化的优化器（由 build_optimizer 或外部构建）
+        :param scheduler: 已实例化的调度器（由 build_scheduler 或外部构建，None 表示固定学习率）
         :param early_stop_patience: 早停容忍次数。语义为"连续 N 次验证不改善后停训"
             （与 PyTorch Lightning 一致），不是训练 epoch 数。
             实际等效 epoch 数 = early_stop_patience × eval_interval。
@@ -89,9 +86,9 @@ class BaseTrainer:
         :param monitor: 统一监控指标，best.pt 保存 / 早停 / ReduceLROnPlateau 共用。
             必须使用 slash 前缀风格，与 metrics.csv 列名一致：
             'val/loss'、'val/acc' 或 metrics.compute() 结果中的任意键加 'val/' 前缀
-            （分类如 'val/macro_f1'，分割如 'val/miou'）
+            （分类如 'val/f1'，分割如 'val/iou'）
         :param monitor_mode: 'auto' 按名称推断
-            （含 loss/err/perplexity → min；含 acc/f1/iou/precision/recall/kappa/oa/mpa/mf1 → max），
+            （含 loss/err/perplexity → min；含 acc/f1/iou/precision/recall/kappa/oa → max），
             也可显式指定 'min' / 'max'
         :param use_tensorboard: 是否启用 TensorBoard 标准日志。writer 在
             init_settings 中创建（写入 save_dir/tensorboard），生命周期由
@@ -138,7 +135,7 @@ class BaseTrainer:
         if monitor_mode == 'auto':
             key = monitor.split('/')[-1].lower()
             MIN_KEYS = ('loss', 'err', 'perplexity')
-            MAX_KEYS = ('acc', 'f1', 'iou', 'precision', 'recall', 'kappa', 'oa', 'mpa', 'mf1')
+            MAX_KEYS = ('acc', 'f1', 'iou', 'precision', 'recall', 'kappa', 'oa')
             if any(k in key for k in MIN_KEYS):
                 self.monitor_mode = 'min'
             elif any(k in key for k in MAX_KEYS):
@@ -165,18 +162,19 @@ class BaseTrainer:
         # 损失函数（默认在此实例化，避免可变默认参数被多个实例共享；
         # 显式 to(device)：带 weight 等 buffer 的 loss 需与模型同设备）
         self.criterion = (criterion or nn.CrossEntropyLoss()).to(self.device)
-        # 优化器与调度器配置
-        self.optimizer = None
-        self.scheduler = None
-        self.optimizer_cfg = optimizer_cfg
-        self.scheduler_cfg = scheduler_cfg
+        # 优化器与调度器（由调用方外部实例化后传入，训练器只负责使用与状态管理）
+        self.optimizer = optimizer
+        self.scheduler = scheduler
         self.max_grad_norm = max_grad_norm
         # 早停配置（与调度器配置解耦，patience=None 表示禁用早停）
         self.early_stop_patience = early_stop_patience
         self.early_stop_delta = early_stop_delta
-        # 是否为 batch 级调度器（如 OneCycleLR），在 init_optim_scheduler 中按实例类型判定
-        self.is_batch_scheduler = False
+        self.min_epochs = min_epochs
+        # 是否为 batch 级调度器（如 OneCycleLR），按实例类型判定
+        self.is_batch_scheduler = isinstance(self.scheduler, lr_scheduler.OneCycleLR)
 
+        # 早停器状态（断点续训时由 load_model 恢复，fit 中创建 early_stopper 后消费）
+        self._early_stopper_state: Optional[Dict[str, Any]] = None
         # 恢复训练
         self.resume = resume
         # 编译选项
@@ -192,13 +190,13 @@ class BaseTrainer:
         # 进度条开关（DDP 非主进程置 True 避免多进程进度条交错刷屏）
         self.pbar_disable = False
 
-        # TensorBoard writer（标准日志开关；writer 在 init_settings 中创建，
+        # TensorBoard 日志组件（writer 在 init_settings 中创建，
         # 因 save_dir 需先建目录；DDP 非主进程不走 init_settings，天然不创建）
         self.use_tensorboard = use_tensorboard
-        self.writer = None
+        self.tb_logger: Optional[TensorBoardLogger] = None
 
         # 可视化器：只持有展示配置（输出目录/类别名），训练数据由调用时显式传入
-        self.visualizer = TrainingVisualizer(
+        self.visualizer = Visualizer(
             save_dir=self.save_dir,
             class_names=self.class_names,
             logger=self.logger,
@@ -207,10 +205,12 @@ class BaseTrainer:
         # 指标记录（内存列表供绘图；持久化由 History 组件写入 CSV（metrics.csv），
         # 断点续训时由 load_model 从旧目录的日志恢复，保证曲线完整衔接；
         # 全新训练应新建 Trainer 实例）
-        self.metrics = metrics
+        # 指标模板（由调用方传入基于 torchmetrics 的 MetricCollection 实例，
+        # 内部通过 clone(prefix) 为 val/test 创建独立的指标计算器）
+        self._metric_template = metric
         self.train_loss_all = []
         # val_metrics_history: 验证指标历史，键名与 metrics.csv 列名一致
-        # （'val/loss'、'val/acc'、'val/macro_f1' 等）。绘图时按需取用
+        # （'val/loss'、'val/acc'、'val/f1' 等）。绘图时按需取用
         self.val_metrics_history: Dict[str, list] = {}
         self.val_epochs = []  # 记录每次验证对应的 epoch（eval_interval > 1 时绘图用）
         self.lr_history = []
@@ -244,12 +244,13 @@ class BaseTrainer:
             fieldnames=self._build_history_fieldnames(),
         )
 
-        # TensorBoard writer（标准日志，与 checkpoint 同目录便于归档对比；
+        # TensorBoard 日志组件（与 checkpoint 同目录便于归档对比；
         # 查看：tensorboard --logdir <output_dir>，各时间戳子目录自动识别为 run）
-        if self.use_tensorboard:
-            tb_dir = self.save_dir / 'tensorboard'
-            self.writer = SummaryWriter(log_dir=str(tb_dir))
-            self.logger.info(f"📈 TensorBoard logging to: {tb_dir}")
+        tb_dir = self.save_dir / 'tensorboard'
+        self.tb_logger = TensorBoardLogger(
+            log_dir=str(tb_dir),
+            enabled=self.use_tensorboard,
+        )
 
         self.logger.info(f"🤖 Setting up device: {self.device}")
 
@@ -269,25 +270,42 @@ class BaseTrainer:
                 f"GradScaler: {'on' if self.scaler.is_enabled() else 'off (non-CUDA)'}"
             )
 
-        # 优化器和调度器
-        self.logger.info("🔧 Initializing optimizer and scheduler...")
+        # 优化器和调度器：类型检测 + 配置摘要日志
         self.logger.info(f"📌 Monitor: {self.monitor} (mode: {self.monitor_mode})")
-        self.init_optim_scheduler(self.optimizer_cfg, self.scheduler_cfg)
+        self._detect_scheduler_type()
+        self._log_component_configs()
 
         # 恢复训练（resume=True: 同时恢复 epoch/best_metric/优化器/调度器状态）
         if self.resume:
             self.logger.info(f"📥 Resuming from checkpoint: {self.resume}")
             self.load_model(self.resume, resume=True)
 
-        # 指标计算器（基于混淆矩阵，在 CPU 上累积，避免 GPU 内存占用过高）
+        # 指标计算器（基于 torchmetrics MetricCollection 的 clone 机制，
+        # 从用户传入的模板派生出 val/test 两套独立实例，各自带 phase 前缀；
+        # state 跟随训练设备，DDP 下须在通信设备上）
         self.logger.info("📊 Initializing metrics calculator...")
-        if self.metrics is None:
-            # 未传入自定义 metrics 时按任务类型选择计算器；
-            # ignore_index 等任务默认值已下沉到各指标类内部（分割默认 255），
-            # 如需定制（top_k、其他 ignore_index 等）直接传入实例
-            self.metrics = (ClassificationMetric(self.num_classes)
-                            if self.is_classification
-                            else SegmentationMetric(self.num_classes))
+        if self._metric_template is None:
+            raise ValueError(
+                "metric 参数必须传入基于 torchmetrics 的指标模板"
+                "（如 MulticlassClassificationMetric / MulticlassSegmentationMetric）"
+            )
+        # 模板应为 phase 中性（无 prefix/postfix），trainer 负责按 val/test 分配前缀；
+        # 若模板已携带 prefix，clone(prefix='val/') 会覆盖，但 fieldnames 可能与实际键名不一致
+        if getattr(self._metric_template, 'prefix', None):
+            raise ValueError(
+                "metric 模板不应携带 prefix（ trainer 自动分配 'val/'/'test/'），"
+                f"当前 prefix='{self._metric_template.prefix}'，请移除后重试"
+            )
+        if getattr(self._metric_template, 'postfix', None):
+            self.logger.warning(
+                f"⚠️ metric 模板携带 postfix='{self._metric_template.postfix}'，"
+                "可能影响键名匹配，建议移除"
+            )
+        self._val_metric = self._metric_template.clone(prefix='val/')
+        self._test_metric = self._metric_template.clone(prefix='test/')
+        self._val_metric.to(self.device)
+        self._test_metric.to(self.device)
+        self.metrics = self._val_metric  # 默认活跃指标为 val
 
         # 模型编译（PyTorch 2.0+）
         if self.compile_model:
@@ -299,37 +317,18 @@ class BaseTrainer:
         self.logger.info("✅ Initialization complete!")
 
 
-    def init_optim_scheduler(
-            self,
-            optimizer_cfg: Optional[Dict[str, Any]] = None,
-            scheduler_cfg: Optional[Dict[str, Any]] = None) -> None:
+    def _detect_scheduler_type(self) -> None:
         """
-        初始化优化器和学习率调度器（委托 optimizers.builder 统一构建）
-        :param optimizer_cfg: 优化器配置字典，字段说明见 build_optimizer
-        :param scheduler_cfg: 调度器配置字典，字段说明见 build_scheduler（None 表示固定学习率）
-        """
-        # ========== 优化器 ==========
-        self.optimizer = build_optimizer(self.model, optimizer_cfg)
-        self.logger.info(
-            f"🎯 Optimizer: {type(self.optimizer).__name__} | "
-            f"LR: {self.optimizer.param_groups[0]['lr']:.2e} | "
-            f"Weight Decay: {self.optimizer.param_groups[0]['weight_decay']:.2e} | "
-            f"Param Groups: {len(self.optimizer.param_groups)}"
-        )
+        检测调度器类型并执行一致性校验。
 
-        # ========== 调度器 ==========
-        self.scheduler = build_scheduler(
-            self.optimizer,
-            scheduler_cfg,
-            total_epochs=self.epochs,
-            steps_per_epoch=len(self.train_loader) if self.train_loader else None,
-        )
+        - 设置 is_batch_scheduler（OneCycleLR 按 batch step，其余按 epoch step）
+        - ReduceLROnPlateau 的 mode 与 monitor_mode 对齐检查
+        """
         if self.scheduler is None:
             self.logger.info("Scheduler: None (using constant learning rate)")
-        else:
-            self.logger.info(f"Scheduler: {type(self.scheduler).__name__}")
-        # OneCycleLR 在每个 batch 后 step，其余调度器在每个 epoch 后 step
-        self.is_batch_scheduler = isinstance(self.scheduler, lr_scheduler.OneCycleLR)
+            return
+
+        self.logger.info(f"Scheduler: {type(self.scheduler).__name__}")
 
         # Plateau 与统一 monitor 的 mode 对齐检查（不一致时 LR 衰减方向会反）
         if isinstance(self.scheduler, lr_scheduler.ReduceLROnPlateau) and \
@@ -337,15 +336,158 @@ class BaseTrainer:
             self.logger.warning(
                 f"⚠️ ReduceLROnPlateau mode '{self.scheduler.mode}' != monitor_mode "
                 f"'{self.monitor_mode}' (monitor='{self.monitor}'), "
-                f"set scheduler_cfg['mode'] = '{self.monitor_mode}' to align"
+                f"please align scheduler mode with monitor_mode='{self.monitor_mode}'"
             )
+
+
+    def _log_component_configs(self) -> None:
+        """
+        记录各组件的配置摘要并保存为 JSON（可扩展）。
+
+        行为：
+          1. 从实例提取结构化配置字典（与 optim_cfg/sched_cfg 同构，可直接用于复现）
+          2. 输出可读日志到控制台
+          3. 写入 save_dir/component_configs.json
+
+        当前支持：
+          - Optimizer：类型、参数组、学习率、权重衰减等
+          - Scheduler：类型及关键参数
+
+        后续可扩展至 criterion、metric 等组件的配置记录。
+        """
+        config = self._extract_component_configs()
+
+        # ── 控制台日志 ─────────────────────────────────────────────────────
+        self.logger.info("=" * 50)
+        self.logger.info("📋 Component Configuration Summary")
+        self.logger.info("=" * 50)
+
+        # Optimizer
+        opt = config.get('optimizer')
+        if opt:
+            self.logger.info(f"[Optimizer] {opt['type']}")
+            for i, pg in enumerate(opt.get('param_groups_info', [])):
+                group_info = f"  Group {i}: lr={pg['lr']:.2e}, weight_decay={pg['weight_decay']:.2e}"
+                if 'betas' in pg:
+                    group_info += f", betas={pg['betas']}"
+                if 'momentum' in pg and pg['momentum'] != 0:
+                    group_info += f", momentum={pg['momentum']}"
+                self.logger.info(group_info)
+        else:
+            self.logger.info("[Optimizer] None")
+
+        # Scheduler
+        sched = config.get('scheduler')
+        if sched:
+            sched_info = f"[Scheduler] {sched['type']}"
+            # 拼接非 type 字段为可读摘要
+            detail = {k: v for k, v in sched.items() if k != 'type'}
+            if detail:
+                sched_info += " | " + ", ".join(f"{k}={v}" for k, v in detail.items())
+            self.logger.info(sched_info)
+        else:
+            self.logger.info("[Scheduler] None (constant learning rate)")
+
+        self.logger.info("=" * 50)
+
+        # ── 保存 JSON ───────────────────────────────────────────────────────
+        config_path = self.save_dir / 'component_configs.json'
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            self.logger.info(f"💾 Component configs saved: {config_path.name}")
+        except Exception as e:
+            self.logger.warning(f"⚠️ Failed to save component configs: {e}")
+
+
+    def _extract_component_configs(self) -> Dict[str, Any]:
+        """
+        从 optimizer/scheduler 实例提取结构化配置字典。
+
+        返回格式与 build_optimizer/build_scheduler 的 cfg 入参同构，
+        可直接作为复现时的配置输入。
+
+        Returns:
+            包含 'optimizer' 和 'scheduler' 键的字典
+        """
+        config: Dict[str, Any] = {}
+
+        # ── Optimizer ──────────────────────────────────────────────────────
+        if self.optimizer is not None:
+            opt_cfg: Dict[str, Any] = {
+                'type': type(self.optimizer).__name__.lower(),
+            }
+            # 从第一个参数组提取通用参数
+            pg0 = self.optimizer.param_groups[0]
+            opt_cfg['lr'] = pg0['lr']
+            opt_cfg['weight_decay'] = pg0['weight_decay']
+            if 'betas' in pg0:
+                opt_cfg['betas'] = list(pg0['betas'])
+            if 'momentum' in pg0:
+                opt_cfg['momentum'] = pg0['momentum']
+            if 'alpha' in pg0:
+                opt_cfg['alpha'] = pg0['alpha']
+            if 'eps' in pg0:
+                opt_cfg['eps'] = pg0['eps']
+            if len(self.optimizer.param_groups) > 1:
+                opt_cfg['head_lr_scale'] = (
+                    self.optimizer.param_groups[1]['lr'] / pg0['lr']
+                    if pg0['lr'] > 0 else 1.0
+                )
+            # 保存每个参数组的详细信息（仅供日志展示，不用于复现）
+            opt_cfg['param_groups_info'] = [
+                {k: v for k, v in pg.items()
+                 if k in ('lr', 'weight_decay', 'betas', 'momentum')}
+                for pg in self.optimizer.param_groups
+            ]
+            config['optimizer'] = opt_cfg
+
+        # ── Scheduler ───────────────────────────────────────────────────────
+        if self.scheduler is not None:
+            sched_cfg: Dict[str, Any] = {}
+            # 调度器类 → builder 工厂键名的反向映射
+            # 用于将实例类型还原为 build_scheduler 可识别的 type 字段
+            _SCHED_CLASS_TO_KEY = {
+                lr_scheduler.StepLR: 'steplr',
+                lr_scheduler.MultiStepLR: 'multisteplr',
+                lr_scheduler.ExponentialLR: 'exponentiallr',
+                lr_scheduler.ReduceLROnPlateau: 'plateau',
+                lr_scheduler.CosineAnnealingLR: 'cosineannealinglr',
+                lr_scheduler.OneCycleLR: 'onecyclelr',
+                lr_scheduler.LambdaLR: 'warmup_cosine',  # 项目中 LambdaLR 实例均来自 warmup_cosine
+            }
+            sched_cls = type(self.scheduler)
+            sched_cfg['type'] = _SCHED_CLASS_TO_KEY.get(sched_cls, sched_cls.__name__.lower())
+
+            # 按类型提取关键参数（与 build_scheduler 的 sched_kwargs 对齐）
+            if isinstance(self.scheduler, lr_scheduler.StepLR):
+                sched_cfg['step_size'] = self.scheduler.step_size
+                sched_cfg['gamma'] = self.scheduler.gamma
+            elif isinstance(self.scheduler, lr_scheduler.MultiStepLR):
+                sched_cfg['milestones'] = list(self.scheduler.milestones)
+                sched_cfg['gamma'] = self.scheduler.gamma
+            elif isinstance(self.scheduler, lr_scheduler.ExponentialLR):
+                sched_cfg['gamma'] = self.scheduler.gamma
+            elif isinstance(self.scheduler, lr_scheduler.ReduceLROnPlateau):
+                sched_cfg['mode'] = self.scheduler.mode
+                sched_cfg['factor'] = self.scheduler.factor
+                sched_cfg['patience'] = self.scheduler.patience
+            elif isinstance(self.scheduler, lr_scheduler.CosineAnnealingLR):
+                sched_cfg['T_max'] = self.scheduler.T_max
+                sched_cfg['eta_min'] = self.scheduler.eta_min
+            elif isinstance(self.scheduler, lr_scheduler.OneCycleLR):
+                sched_cfg['max_lr'] = self.scheduler.max_lrs[0]
+                sched_cfg['total_steps'] = self.scheduler.total_steps
+            config['scheduler'] = sched_cfg
+
+        return config
 
 
     def _build_history_fieldnames(self) -> List[str]:
         """
         构造 CSV 表头列名（Lightning 风格 slash 前缀）。
 
-        固定元数据列 + train 专属列 + val 通用列 + 任务相关汇总列。
+        固定元数据列 + train 专属列 + val 通用列 + 从指标模板动态获取的汇总列。
         逐类指标不入 CSV（走 TensorBoard 的 val_per_class/ 分组），
         top_k 暂不写入（后续按需扩展）。
 
@@ -353,8 +495,7 @@ class BaseTrainer:
             epoch, phase
             train/loss, train/lr, train/time
             val/loss, val/acc, val/time
-            val/<summary_metrics...>   # 分类: balanced_acc/macro_*/weighted_f1/kappa
-                                       # 分割: mpa/miou/fwiou/mf1
+            val/<summary_metrics...>   # 由 metric_template.metric_keys() 动态生成
         """
         # 1. 元数据（train/val 行均填）
         fields = ['epoch', 'phase']
@@ -362,12 +503,11 @@ class BaseTrainer:
         fields += ['train/loss', 'train/lr', 'train/time']
         # 3. val 通用（val 行填，train 行留空）；val/acc 统一对应分类 acc / 分割 oa
         fields += ['val/loss', 'val/acc', 'val/time']
-        # 4. 任务相关汇总指标
-        if self.is_classification:
-            fields += ['val/balanced_acc', 'val/macro_precision', 'val/macro_recall',
-                       'val/macro_f1', 'val/weighted_f1', 'val/kappa']
-        else:
-            fields += ['val/mpa', 'val/miou', 'val/fwiou', 'val/mf1']
+        # 4. 从指标模板动态获取汇总指标键名（已含 val/ 前缀），
+        #    替代硬编码以适配不同指标模板（分类/分割/自定义）
+        if self._metric_template is not None:
+            val_keys = self._metric_template.clone(prefix='val/').metric_keys()
+            fields += [k for k in val_keys if k not in fields]
         return fields
 
 
@@ -387,39 +527,25 @@ class BaseTrainer:
 
     def _resolve_monitor_key(self, val_metrics: Dict[str, Any]) -> Tuple[str, float]:
         """
-        从 val_metrics 中取出 monitor 对应的原始键名与指标值。
-
-        monitor 采用 slash 前缀风格（'val/loss'、'val/acc'），但 val_metrics
-        的键是原始短名（'loss'、'acc'、'miou' 等）。这里做一次归一化映射：
-            'val/loss' → 'loss'
-            'val/acc' → 'acc'（ClassificationMetric.compute() 输出 'acc'）
-            'val/oa'  → 'oa' （SegmentationMetric.compute() 输出 'oa'）
-            'val/miou' → 'miou'
-            ...（取 '/' 之后的部分）
-
-        特殊兼容：'val/acc' 在分割任务中对应 'oa'（_overall_acc 已统一为 acc），
-        但 val_metrics dict 里仍是原始 'oa' 键，因此对分割任务做一次 acc→oa 映射。
-
+        从 val_metrics 中取出 monitor 对应的键名与指标值。
+    
+        evaluate_epoch 返回的键统一采用 slash 前缀风格（'val/loss'、'val/acc' 等），
+        与 self.monitor 直接匹配，无需短名兼容。
+    
         Args:
-            val_metrics: evaluate_epoch 返回的指标字典
-
+            val_metrics: evaluate_epoch 返回的指标字典（键已含 'val/' 前缀）
+    
         Returns:
-            (原始键名, 指标值)
-
+            (键名, 指标值)
+    
         Raises:
-            KeyError: monitor 末段在 val_metrics 中找不到（含 acc↔oa 兜底后仍失败）
+            KeyError: monitor 在 val_metrics 中找不到
         """
-        key = self.monitor.split('/')[-1]
-        if key in val_metrics:
-            return key, val_metrics[key]
-        # acc/oa 互转兜底（分割 monitor='val/acc' 但 metrics 输出 'oa'，反之同理）
-        if key == 'acc' and 'oa' in val_metrics:
-            return 'oa', val_metrics['oa']
-        if key == 'oa' and 'acc' in val_metrics:
-            return 'acc', val_metrics['acc']
+        if self.monitor in val_metrics:
+            return self.monitor, val_metrics[self.monitor]
         raise KeyError(
-            f"monitor key '{key}' (from monitor='{self.monitor}') not found in "
-            f"val_metrics, available keys: {sorted(val_metrics.keys())}"
+            f"monitor '{self.monitor}' not found in val_metrics, "
+            f"available keys: {sorted(val_metrics.keys())}"
         )
 
 
@@ -452,7 +578,7 @@ class BaseTrainer:
             if val_metrics is None:
                 return self.optimizer.param_groups[0]['lr']
             # 统一监控指标（与 best.pt / 早停一致），
-            # mode 对齐已在 init_optim_scheduler 构建时校验
+            # mode 对齐已在 _detect_scheduler_type 中校验
             # monitor 采用 slash 前缀风格，这里归一化取原始键
             _, metric = self._resolve_monitor_key(val_metrics)
 
@@ -464,111 +590,6 @@ class BaseTrainer:
             self.scheduler.step()
         
         return self.optimizer.param_groups[0]['lr']
-
-
-    # ==================== SummaryWriter 标准日志接口层 ====================
-    # 两套日志分工：自定义日志（logger / History CSV / visualizer）面向
-    # 实验过程中的快速查看；以下方法统一收拢 SummaryWriter 调用，按业内
-    # 标准工具的形式记录（标量曲线 / 模型结构 / 超参对比）。
-    # 后续迁移 wandb / mlflow 等工具时，只需替换这一层实现，
-    # 训练主流程（fit / train_epoch / evaluate_epoch）无需改动。
-
-    def log_scalars(self,
-                    scalars: Dict[str, Any],
-                    step: int,
-                    prefix: str = '') -> None:
-        """
-        批量记录标量曲线。writer 未启用时静默跳过；非数值项自动忽略。
-
-        Args:
-            scalars: 标量字典，如 {'epoch_loss': 0.5, 'learning_rate': 1e-3}
-            step: 横轴步数（epoch 级传 current_epoch，batch 级传 global_step）
-            prefix: 标签前缀（如 'train/'、'val/'，用于面板分组）
-        """
-        if self.writer is None:
-            return
-        for name, value in scalars.items():
-            # bool 是 int 子类但无曲线意义；time 等非数值项直接跳过
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            self.writer.add_scalar(f'{prefix}{name}', value, step)
-
-
-    def log_val_metrics(self, results: Dict[str, float], step: int) -> None:
-        """
-        记录 metrics.compute() 的全部验证指标。
-
-        汇总指标（分类 acc/macro_f1、分割 oa/miou/mf1 等）写入 'val/'；
-        逐类指标（iou_0/precision_1 等）按类别名分组写入 'val_per_class/'，
-        避免类别较多时污染主面板。
-        """
-        if self.writer is None:
-            return
-        summary, per_class = {}, {}
-        for key, value in results.items():
-            m = re.match(r'^(.+)_(\d+)$', key)
-            if m and int(m.group(2)) < self.num_classes:
-                base, idx = m.group(1), int(m.group(2))
-                per_class[f'{base}/{self.class_names[idx]}'] = value
-            else:
-                summary[key] = value
-        self.log_scalars(summary, step, 'val/')
-        self.log_scalars(per_class, step, 'val_per_class/')
-
-
-    def log_graph(self) -> None:
-        """
-        记录模型结构图（训练开始时调用一次；失败仅告警不阻断训练）。
-
-        add_graph 基于 trace，部分动态控制流模型 / 特殊设备可能失败，
-        因此包在 try 中；trace 对象用 _unwrap_model 避开 torch.compile 包装层。
-        """
-        if self.writer is None or self.train_loader is None:
-            return
-        try:
-            sample, _ = next(iter(self.train_loader))
-            self.writer.add_graph(self._unwrap_model(), sample.to(self.device))
-            self.logger.info("📈 Model graph logged to TensorBoard")
-        except Exception as e:
-            self.logger.warning(f"⚠️ Failed to log model graph: {e}")
-
-
-    def log_hparams(self, metrics: Dict[str, float]) -> None:
-        """
-        记录超参数与最终指标的对照表（训练结束时调用一次，
-        供 TensorBoard HPARAMS 面板跨实验对比）。
-
-        Args:
-            metrics: 最终指标字典，键名建议带 'hparam/' 前缀（业内惯例，
-                     与普通标量曲线区分）
-        """
-        if self.writer is None:
-            return
-        # 基础超参（add_hparams 仅支持 int/float/str/bool，其余类型转 str）
-        hparams: Dict[str, Any] = {
-            'model': type(self._unwrap_model()).__name__,
-            'criterion': type(self.criterion).__name__,
-            'epochs': self.epochs,
-            'use_amp': self.use_amp,
-            'monitor': self.monitor,
-        }
-        batch_size = getattr(self.train_loader, 'batch_size', None)
-        if batch_size is not None:
-            hparams['batch_size'] = batch_size
-        if self.max_grad_norm is not None:
-            hparams['max_grad_norm'] = self.max_grad_norm
-        # 展平优化器/调度器配置（嵌套字典不被 add_hparams 支持）
-        for cfg_name, cfg in (('optim', self.optimizer_cfg),
-                              ('sched', self.scheduler_cfg)):
-            for k, v in (cfg or {}).items():
-                hparams[f'{cfg_name}/{k}'] = (
-                    v if isinstance(v, (int, float, str, bool)) else str(v))
-        try:
-            # run_name='.' 写入当前 run 目录，避免产生额外的时间戳子 run
-            self.writer.add_hparams(hparams, metrics, run_name='.')
-            self.logger.info("📈 Hparams logged to TensorBoard")
-        except Exception as e:
-            self.logger.warning(f"⚠️ Failed to log hparams: {e}")
 
 
     def fit(self) -> None:
@@ -621,6 +642,7 @@ class BaseTrainer:
                 f"patience: {self.early_stop_patience} validation rounds "
                 f"(≈ {self.early_stop_patience * self.eval_interval} epochs) | "
                 f"delta: {self.early_stop_delta}"
+                + (f" | min_epochs: {self.min_epochs}" if self.min_epochs > 0 else "")
             )
             # 搭配 Plateau 调度器时，早停 patience 应大于降 LR 的 patience，
             # 否则 LR 还没来得及衰减就触发早停，Plateau 形同虚设
@@ -644,6 +666,14 @@ class BaseTrainer:
             # batch 级曲线横轴衔接（按已完成 epoch 数推算，避免续训后曲线重叠）
             if self.train_loader is not None:
                 self.global_step = self.start_epoch * len(self.train_loader)
+            # 恢复早停器状态（load_model 已将 state 缓存到 self._early_stopper_state）
+            if early_stopper is not None and self._early_stopper_state is not None:
+                early_stopper.load_state_dict(self._early_stopper_state)
+                self.logger.info(
+                    f"🔄 EarlyStopping state restored | "
+                    f"best {self.monitor}: {early_stopper.best_value} "
+                    f"(counter={early_stopper.counter})"
+                )
         if self.start_epoch >= self.epochs:
             self.logger.warning(
                 f"⚠️ start_epoch ({self.start_epoch}) >= epochs ({self.epochs}), "
@@ -651,7 +681,9 @@ class BaseTrainer:
             )
 
         # 标准日志：训练开始时记录一次模型结构图
-        self.log_graph()
+        if self.train_loader is not None:
+            sample, _ = next(iter(self.train_loader))
+            self.tb_logger.log_graph(self._unwrap_model(), sample.to(self.device))
 
         for epoch in range(self.start_epoch, self.epochs):
 
@@ -690,25 +722,19 @@ class BaseTrainer:
                 'train/time': train_results['time'],
             })
             if val_metrics is not None:
-                # val_metrics 含 {loss, acc, time} + metrics.compute() 全部字段；
-                # acc 由 _overall_acc 统一（分类 acc / 分割 oa），映射到 val/acc 列；
-                # 其余汇总指标按任务类型映射到 val/<metric_name> 列，
-                # 逐类指标（precision_i 等）不在 fieldnames 中，会被 History 忽略
+                # val_metrics 键统一为 val/ 前缀风格，直接写入 CSV
                 val_row = {
                     'epoch': self.current_epoch, 'phase': 'val',
-                    'val/loss': val_metrics['loss'],
-                    'val/acc': val_metrics['acc'],
-                    'val/time': val_metrics['time'],
+                    'val/loss': val_metrics['val/loss'],
+                    'val/acc': val_metrics['val/acc'],
+                    'val/time': val_metrics['val/time'],
                 }
-                if self.is_classification:
-                    for k in ('balanced_acc', 'macro_precision', 'macro_recall',
-                              'macro_f1', 'weighted_f1', 'kappa'):
-                        if k in val_metrics:
-                            val_row[f'val/{k}'] = val_metrics[k]
-                else:
-                    for k in ('mpa', 'miou', 'fwiou', 'mf1'):
-                        if k in val_metrics:
-                            val_row[f'val/{k}'] = val_metrics[k]
+                # 其余指标键已含 val/ 前缀，直接写入
+                for k, v in val_metrics.items():
+                    if k in ('val/loss', 'val/acc', 'val/time'):
+                        continue
+                    if isinstance(v, (int, float)) or (hasattr(v, 'ndim') and v.ndim == 0):
+                        val_row[k] = v
                 self.history.append(val_row)
 
             # ========== ✅ 验证轮次专属：更新最佳模型 + 早停判断 ==========
@@ -722,16 +748,16 @@ class BaseTrainer:
                     best_checkpoint = {
                         'monitor': self.monitor,
                         'best_metric': self.best_metric,
-                        'val_acc': val_metrics['acc'],
-                        'val_loss': val_metrics['loss'],
+                        'val/acc': val_metrics['val/acc'],
+                        'val/loss': val_metrics['val/loss'],
                         'epoch': self.current_epoch,
                         'model': self._unwrap_model().state_dict(),
                         'optimizer': self.optimizer.state_dict(),
                         'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
                         'scaler': self.scaler.state_dict() if self.scaler.is_enabled() else None,
                         'config': {  # ✅ 额外保存配置，方便复现
-                            'optimizer_cfg': self.optimizer_cfg,
-                            'scheduler_cfg': self.scheduler_cfg,
+                            'optimizer': type(self.optimizer).__name__ if self.optimizer else None,
+                            'scheduler': type(self.scheduler).__name__ if self.scheduler else None,
                         }
                     }
 
@@ -742,7 +768,7 @@ class BaseTrainer:
                         f"✨ New best model saved! | "
                         f"Epoch: {self.current_epoch} | "
                         f"{self.monitor}: {monitored:.4f} | "
-                        f"Val Loss: {val_metrics['loss']:.4f}"
+                        f"Val Loss: {val_metrics['val/loss']:.4f}"
                     )
 
                 # 早停检查（监控与 best.pt 相同的 monitor；仅判断是否继续训练，
@@ -752,12 +778,21 @@ class BaseTrainer:
                         value=monitored,
                         epoch=self.current_epoch)
                     if early_stopper.early_stop:
-                        self.logger.info(
-                            f"🛑 Early stopping triggered at epoch {self.current_epoch} "
-                            f"(no {self.monitor} improvement for "
-                            f"{early_stopper.patience} validation rounds)"
-                        )
-                        should_stop = True
+                        if self.current_epoch < self.min_epochs:
+                            # 保护期内抑制早停：重置计数器，避免保护期结束后立即触发
+                            early_stopper.counter = 0
+                            early_stopper.early_stop = False
+                            self.logger.debug(
+                                f"⏳ Early stopping suppressed at epoch {self.current_epoch} "
+                                f"(min_epochs={self.min_epochs} protection active)"
+                            )
+                        else:
+                            self.logger.info(
+                                f"🛑 Early stopping triggered at epoch {self.current_epoch} "
+                                f"(no {self.monitor} improvement for "
+                                f"{early_stopper.patience} validation rounds)"
+                            )
+                            should_stop = True
 
             # ========== ✅ 保存最新模型 (last.pt) ==========
             last_checkpoint = {
@@ -766,11 +801,12 @@ class BaseTrainer:
                 'optimizer': self.optimizer.state_dict(),
                 'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
                 'scaler': self.scaler.state_dict() if self.scaler.is_enabled() else None,
-                'val_loss': val_metrics['loss'] if val_metrics else None,
-                'val_acc': val_metrics['acc'] if val_metrics else None,
+                'val/loss': val_metrics['val/loss'] if val_metrics else None,
+                'val/acc': val_metrics['val/acc'] if val_metrics else None,
                 'monitor': self.monitor,
                 'best_metric': self.best_metric,
                 'train_loss': train_results['loss'],
+                'early_stopper': early_stopper.state_dict() if early_stopper is not None else None,
             }
             self.save_model('last.pt', checkpoint=last_checkpoint)
 
@@ -825,13 +861,20 @@ class BaseTrainer:
         val_acc_all = self.val_metrics_history.get('val/acc', [])
         if val_acc_all:
             final_metrics['hparam/final_val_acc'] = val_acc_all[-1]
+        # 从最后一次验证的完整指标中补充其余标量（f1/kappa/balanced_acc 等），
+        # 使 HPARAMS 面板跨实验对比信息更完整
+        if self.val_metrics_result:
+            for k, v in self.val_metrics_result.items():
+                if k in ('val/loss', 'val/acc', 'val/time'):
+                    continue  # 已在上文记录
+                scalar = v.item() if hasattr(v, 'item') else v
+                if isinstance(scalar, (int, float)):
+                    final_metrics[f'hparam/final_{k}'] = scalar
         if final_metrics:
-            self.log_hparams(final_metrics)
+            self.tb_logger.log_hparams(self, final_metrics)
 
-        # 关闭 TensorBoard writer（由 init_settings 创建，生命周期随训练结束；
-        # torch 的 SummaryWriter 关闭后再写入会自动重建 file writer，重复 fit 亦安全）
-        if self.writer is not None:
-            self.writer.close()
+        # 关闭 TensorBoard 日志组件（由 init_settings 创建，生命周期随训练结束）
+        self.tb_logger.close()
 
         # 关闭历史记录文件句柄（已逐条 flush，此处仅显式释放资源）
         self.history.close()
@@ -912,7 +955,7 @@ class BaseTrainer:
                         'loss': f'{batch_loss:.4f}',
                         'lr': f'{current_lr:.2e}'
                     })
-                    self.log_scalars(
+                    self.tb_logger.log_scalars(
                         {'batch_loss': batch_loss, 'batch_lr': current_lr},
                         self.global_step, 'train/')
             except RuntimeError as e:
@@ -937,7 +980,7 @@ class BaseTrainer:
         epoch_time = time.time() - start_time
         samples_per_sec = total_samples / epoch_time
         # 标准日志（epoch 级）
-        self.log_scalars({
+        self.tb_logger.log_scalars({
             'epoch_loss': avg_loss,
             'learning_rate': current_lr,
             'samples_per_sec': samples_per_sec,
@@ -976,56 +1019,33 @@ class BaseTrainer:
         return loss
 
 
-    @staticmethod
-    def _overall_acc(results: Dict[str, float]) -> float:
-        """
-        从指标结果中提取总体精度：分类为 'acc'，分割为 'oa'，
-        两者语义相同（对角线占比）；自定义 metrics 缺失时回退 0.0。
-        """
-        if 'acc' in results:
-            return results['acc']
-        return results.get('oa', 0.0)
-
-
-    def _append_val_metrics(self, avg_loss: float, val_acc: float,
-                            results: Dict[str, float], val_time: float) -> None:
+    def _append_val_metrics(self, results: Dict[str, Any], val_time: float) -> None:
         """
         将本轮验证的指标追加到 val_metrics_history。
 
-        统一用 CSV 列名风格（slash 前缀）存储：
-            'val/loss'、'val/acc'、'val/time'
-            + metrics.compute() 返回的汇总指标加 'val/' 前缀
-              （分类如 'val/macro_f1'，分割如 'val/miou'）
-        逐类指标（如 'precision_0'）不入内存 dict，避免膨胀；
-        其值仍由 CSV 和 TensorBoard 持久化。
+        evaluate_epoch 返回的键统一采用 val/ 前缀风格，
+        直接作为 CSV 列名存入内存 dict；非标量值（混淆矩阵等）自动过滤。
 
         Args:
-            avg_loss: 验证平均损失
-            val_acc: 总体精度（分类 acc / 分割 oa 已统一）
-            results: metrics.compute() 返回的完整指标字典
+            results: evaluate_epoch 返回的指标字典（键已含 'val/' 前缀）
             val_time: 验证耗时（秒）
         """
-        # 首次调用时初始化各指标的列表
         def _ensure(key):
             if key not in self.val_metrics_history:
                 self.val_metrics_history[key] = []
 
-        # 固定列
-        _ensure('val/loss'); self.val_metrics_history['val/loss'].append(avg_loss)
-        _ensure('val/acc');  self.val_metrics_history['val/acc'].append(val_acc)
+        # val/time 不在 compute() 输出中，单独追加
         _ensure('val/time'); self.val_metrics_history['val/time'].append(val_time)
 
-        # 汇总指标（排除逐类指标，避免 dict 膨胀）
+        # 其余指标键统一为 val/ 前缀，直接写入；过滤非标量值
         for key, value in results.items():
-            # 跳过逐类指标（键名以 '_数字' 结尾，如 'precision_0'）
-            if key.split('_')[-1].isdigit():
-                continue
-            # 跳过 acc/oa（已统一为 val/acc）和 loss（已记为 val/loss）
-            if key in ('acc', 'oa', 'loss'):
-                continue
-            csv_key = f'val/{key}'
-            _ensure(csv_key)
-            self.val_metrics_history[csv_key].append(value)
+            if not isinstance(value, (int, float)):
+                if hasattr(value, 'ndim') and value.ndim == 0:
+                    value = value.item()
+                else:
+                    continue
+            _ensure(key)
+            self.val_metrics_history[key].append(value)
 
 
     @torch.no_grad()
@@ -1035,13 +1055,15 @@ class BaseTrainer:
         前向推理、损失计算与指标累积委托给 validation_step（子类可覆写）。
 
         Returns:
-            验证结果字典：{'loss', 'acc', 'time'} + metrics.compute() 的全部指标
-            （分类如 'acc'、'macro_f1'，分割如 'miou'，供统一 monitor 选用）
+            验证结果字典，键统一采用 'val/' 前缀风格：
+            metrics.compute() 全部指标 + 'val/time'（验证耗时）
+            如 'val/acc'、'val/f1'、'val/time'，供 monitor 直接匹配
         """
 
         total_loss = 0.0
         total_samples = 0
         start_time = time.time()
+        self.metrics = self._val_metric  # 切换活跃指标为 val
         self.metrics.reset()
         self.model.eval()
 
@@ -1093,23 +1115,30 @@ class BaseTrainer:
             )
         avg_loss = total_loss.item() / total_samples
         results = self.metrics.compute()
-        val_acc = self._overall_acc(results)
+        # 将 loss 纳入 results，统一 val/ 前缀风格（分类取 val/acc，分割取 val/pixel_acc）
+        results['val/loss'] = avg_loss
+        val_acc = results.get('val/acc', results.get('val/pixel_acc', 0.0))
 
         # 记录元数据
         val_time = time.time() - start_time
         samples_per_sec = total_samples / val_time
 
-        # 标准日志：metrics.compute() 全量指标（含逐类分组）+ 损失/吞吐
-        self.log_val_metrics(results, self.current_epoch)
-        self.log_scalars({
-            'epoch_loss': avg_loss,
+        # 标准日志：汇总指标 → TensorBoard 标量曲线
+        self.tb_logger.log_val_metrics(results, self.current_epoch)
+        # 逐类指标 → TensorBoard val_per_class/ 分组（按需，仅当指标类支持时）
+        if hasattr(self.metrics, 'per_class_metrics') and self.tb_logger.enabled:
+            per_class = self.metrics.per_class_metrics()
+            for k, v in per_class.items():
+                scalar = v.item() if hasattr(v, 'item') else v
+                self.tb_logger.writer.add_scalar(f'val_per_class/{k}', scalar, self.current_epoch)
+        self.tb_logger.log_scalars({
             'epoch_acc': val_acc,
             'samples_per_sec': samples_per_sec,
         }, self.current_epoch, 'val/')
         
         # 更新历史 dict（val_epochs 记录对应轮次，eval_interval > 1 时绘图对齐用）
         # 所有指标统一存入 val_metrics_history，键名与 metrics.csv 列名一致
-        self._append_val_metrics(avg_loss, val_acc, results, val_time)
+        self._append_val_metrics(results, val_time)
         self.val_epochs.append(self.current_epoch)
         self.val_metrics_result = results  # 保留详细结果供后续分析
         
@@ -1123,10 +1152,9 @@ class BaseTrainer:
         # 可选：记录详细指标到 debug 日志
         # self.logger.debug(f"Validation metrics detail: {results}")
 
-        return {**results,
-                'loss': avg_loss, 
-                'acc': val_acc, 
-                'time': val_time}
+        # evaluate_epoch 返回键统一为 val/ 前缀，直接合并 time 即可
+        results['val/time'] = val_time
+        return results
 
 
     def validation_step(
@@ -1149,9 +1177,10 @@ class BaseTrainer:
         logits = self.model(inputs)
         loss = self.criterion(logits, targets)
 
-        # 指标计算器的混淆矩阵在 CPU 上，先搬运避免 GPU 训练时设备不匹配
-        # （logits 传入后由 metrics.update 自动 argmax）
-        self.metrics.update(logits.detach().cpu(), targets.detach().cpu())
+        # 指标 state 已 .to(self.device)，直接在训练设备上累积；
+        # update 内部会 argmax 并对齐到 matrix 设备，无需手动搬运。
+        # DDP 下 state 留在通信设备是 torchmetrics gather 同步的前提。
+        self.metrics.update(logits.detach(), targets.detach())
         return loss, logits
 
 
@@ -1169,7 +1198,9 @@ class BaseTrainer:
             save_predictions: 是否保存预测结果
         
         Returns:
-            测试结果字典 {'loss', 'acc', 'time', 'samples', 'cnf_matrix'}；
+            测试结果字典，包含：
+                - loss, acc, time, samples, cnf_matrix 基础字段
+                - metrics: compute() 完整结果（含 f1/kappa/balanced_acc 等全部指标）
             test_loader 未提供时直接返回 None
         """
         if self.test_loader is None:
@@ -1179,6 +1210,7 @@ class BaseTrainer:
         total_loss = 0.0
         total_samples = 0
         start_time = time.time()
+        self.metrics = self._test_metric  # 切换活跃指标为 test
         self.model.eval()
         self.metrics.reset()
 
@@ -1256,9 +1288,10 @@ class BaseTrainer:
             )
         avg_loss = total_loss.item() / total_samples
         results = self.metrics.compute()
-        test_acc = self._overall_acc(results)
-        # 混淆矩阵从指标计算器直接获取，转 numpy 供绘图使用
-        cnf_matrix = self.metrics.confusion_matrix.cpu().numpy()
+        test_acc = results.get('test/acc', results.get('test/pixel_acc', 0.0))
+        # 混淆矩阵通过 property 获取（cm.matrix）；
+        # DDP 模式下已由 DDPTrainer.test() 在 super() 前 all_reduce
+        cnf_matrix = self._test_metric.confusion_matrix.cpu().numpy()
         self.cnf_matrix = cnf_matrix
 
         test_time = time.time() - start_time
@@ -1281,12 +1314,15 @@ class BaseTrainer:
                         f.write('\n'.join(map(str, errors)))
                     self.logger.info(f"❌ {len(errors)} errors logged to {error_path}")
         
-        # 打印详细测试报告（报告格式化见 trainers/visualizer.py）
+        # 打印详细测试报告（报告格式化见 trainers/report.py）
         if report_results:
-            self.visualizer.print_test_report(
+            print_test_report(
                 results, cnf_matrix, test_time, samples_per_sec,
+                class_names=self.class_names,
+                prefix='test/',
                 is_classification=self.is_classification,
                 save_path=str(self.save_dir / 'test_report.txt'),
+                logger=self.logger,
             )
 
         # 混淆矩阵可视化（随测试一起从 fit() 移入，仅分类任务绘制）
@@ -1307,6 +1343,7 @@ class BaseTrainer:
                 'time': test_time, 
                 'samples': total_samples, 
                 'cnf_matrix': cnf_matrix,
+                'metrics': results,
                 }
 
 
@@ -1373,8 +1410,8 @@ class BaseTrainer:
             # 保存失败/中断时清理残留临时文件，原 checkpoint 不受影响
             tmp_path.unlink(missing_ok=True)
             raise
-        
-        self.logger.info(f"💾 Model saved: {filename}")
+        if filename == 'best.pt':
+            self.logger.info(f"💾 Model saved: {filename}")
         return str(model_path)
 
 
@@ -1535,6 +1572,9 @@ class BaseTrainer:
                     better = min if self.monitor_mode == 'min' else max
                     self.best_metric = better(self.best_metric, restored_best)
 
+                # 恢复早停器状态（缓存到类属性，fit 中创建 early_stopper 后再还原）
+                self._early_stopper_state = checkpoint.get('early_stopper')
+
                 # 恢复训练历史曲线：从 checkpoint 同目录的 metrics.csv 迁移
                 # （曲线数据由 History 组件持久化，不入 checkpoint）
                 self._restore_history(Path(checkpoint_fn).parent / 'metrics.csv')
@@ -1545,10 +1585,14 @@ class BaseTrainer:
                     f"best {self.monitor}: {self.best_metric:.4f}"
                 )
 
-            # ✅ 加载时打印关键指标（替代文件名中的信息）
+            # ✅ 加载时打印关键指标（兼容新旧 checkpoint 键名格式）
             epoch = checkpoint.get('epoch', 'N/A') if isinstance(checkpoint, dict) else 'N/A'
-            val_acc = checkpoint.get('val_acc') if isinstance(checkpoint, dict) else None
-            val_loss = checkpoint.get('val_loss') if isinstance(checkpoint, dict) else None
+            # 新格式 'val/acc'/'val/loss'，旧格式 'val_acc'/'val_loss'
+            val_acc = None
+            val_loss = None
+            if isinstance(checkpoint, dict):
+                val_acc = checkpoint.get('val/acc', checkpoint.get('val_acc'))
+                val_loss = checkpoint.get('val/loss', checkpoint.get('val_loss'))
             
             self.logger.info(f"📥 Model loaded from {os.path.basename(checkpoint_fn)}")
             self.logger.info(f"   • Epoch: {epoch}")

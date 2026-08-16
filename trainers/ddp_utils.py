@@ -37,6 +37,15 @@ class _NoopHistory:
     def close(self) -> None:
         pass
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def __len__(self) -> int:
+        return 0
+
 
 class _NoopVisualizer:
     """非主进程的可视化器替身：所有绘图/报告调用静默跳过，避免多进程重复写文件"""
@@ -47,42 +56,49 @@ class _NoopVisualizer:
 
 class _DistributedMetrics:
     """
-    分布式指标包装器：compute() 前先做跨 rank 汇总，
-    使所有 rank 得到完全一致的全局指标（集合通信保证各 rank 结果相同，
-    因此 best.pt 保存/早停决策在各 rank 间天然同步，无需额外广播）。
+    分布式指标透传包装器。
 
-    优先调用被包装器自身的 all_reduce()（新版指标类均提供，
-    可同步混淆矩阵之外的状态，如 ClassificationMetric 的 Top-k 计数）；
-    仅暴露 confusion_matrix 的自定义指标回退到矩阵 reduce。
+    包装原生 PyTorch 指标类（ClassificationMetric / SegmentationMetric），
+    在 compute() / per_class_metrics() / confusion_matrix 前自动调用
+    all_reduce() 汇总各 rank 的混淆矩阵，确保指标为全局精确值。
 
-    注意：compute() 包含集合通信，所有 rank 必须同步调用相同次数。
+    前提约束（由调用方保证）：
+        - 指标类实现 all_reduce() 方法（内部调用 dist.all_reduce SUM）
+        - 指标实例已 .to(通信设备)（NCCL 后端要求 state 在 CUDA）
+        - 所有 rank 以相同顺序调用 update/compute（集合通信同步性要求）
+
+    注意：compute() 含集合通信，所有 rank 必须同步调用相同次数。
     """
 
     def __init__(self, metrics):
         self.metrics = metrics
-        self._synced = False  # 防止同一轮重复 compute 时状态被叠加多次
 
     def reset(self) -> None:
-        self._synced = False
         self.metrics.reset()
 
     def update(self, preds: torch.Tensor, targets: torch.Tensor) -> None:
-        self._synced = False
         self.metrics.update(preds, targets)
+
+    def all_reduce(self) -> None:
+        """显式触发跨 rank 混淆矩阵汇总（幂等：非 DDP 或已汇总时为 no-op）"""
+        if hasattr(self.metrics, 'all_reduce'):
+            self.metrics.all_reduce()
 
     @property
     def confusion_matrix(self) -> torch.Tensor:
+        """返回 all_reduce 后的全局混淆矩阵"""
+        self.all_reduce()
         return self.metrics.confusion_matrix
 
     def compute(self) -> Dict[str, float]:
-        if not self._synced and get_world_size() > 1:
-            if hasattr(self.metrics, 'all_reduce'):
-                self.metrics.all_reduce()
-            else:
-                global_cm = reduce_value(self.metrics.confusion_matrix, average=False)
-                self.metrics.confusion_matrix.copy_(global_cm)
-            self._synced = True
+        """计算指标前先 all_reduce，确保结果为全局值"""
+        self.all_reduce()
         return self.metrics.compute()
+
+    def per_class_metrics(self) -> Dict[str, torch.Tensor]:
+        """逐类指标（内部先 all_reduce）"""
+        self.all_reduce()
+        return self.metrics.per_class_metrics()
 
 
 
