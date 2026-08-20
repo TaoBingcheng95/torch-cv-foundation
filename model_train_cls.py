@@ -27,7 +27,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Training Script')
     parser.add_argument('--device', default='auto', help='Device to use (auto/cpu/cuda/mps)')
     parser.add_argument('--output_dir', default='checkpoints', help='Output directory for checkpoints')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs to train')
+    parser.add_argument('--max-epochs', default=100, type=int, help='Maximum number of epochs to train')
+    parser.add_argument('--min-epochs', default=10, type=int, help='Minimum number of epochs to train')
     parser.add_argument('--batch_size', default=16, type=int, help='Batch size for training')
     parser.add_argument('--learning_rate', default=1e-3, type=float, help='Learning rate for optimizer')
     parser.add_argument('--resume', default='', help='Path to the checkpoint to resume from')
@@ -46,7 +47,8 @@ if __name__ == '__main__':
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
     
     output_dir=args.output_dir
-    epochs = args.epochs
+    max_epochs = args.max_epochs
+    min_epochs = args.min_epochs
     learning_rate = args.learning_rate
 
     optimal_workers = get_smart_num_workers()
@@ -73,7 +75,8 @@ if __name__ == '__main__':
 
     # ── 训练参数配置（TrainConfig 作为统一参数记录器）──────────────────
     cfg = TrainConfig(
-        max_epochs=epochs,
+        max_epochs=max_epochs,
+        min_epochs=min_epochs,
         batch_size=args.batch_size,
         num_workers=optimal_workers,
         work_dir=output_dir,
@@ -87,15 +90,14 @@ if __name__ == '__main__':
         # sched_cfg={'type': 'plateau', 'mode': 'min', 'patience': 5, 'factor': 0.5},
         sched_cfg={
             'type': 'warmup_cosine',
-            'total_epochs': epochs,
+            'total_epochs': max_epochs,
             'warmup_epochs': 5,
         },
         monitor='val/acc',
         monitor_mode='max',
-        eval_interval=1, # check_val_every_n_epoch=1
+        eval_interval=3, # check_val_every_n_epoch=1
         early_stop_patience=5,
         early_stop_delta=0.01,
-        min_epochs=10,
     )
 
     # 外部实例化优化器与调度器，与 model/criterion/metric 生命周期一致
@@ -113,7 +115,8 @@ if __name__ == '__main__':
     tt = BaseTrainer(model=model,
                      device=device,
                      output_dir=cfg.work_dir,
-                     epochs=cfg.max_epochs,
+                     max_epochs=cfg.max_epochs,
+                     min_epochs=cfg.min_epochs,
                      num_classes=num_classes,
                      train_dataloader=train_dl,
                      val_dataloader=val_dl,
@@ -128,7 +131,6 @@ if __name__ == '__main__':
                      eval_interval=cfg.eval_interval,
                      early_stop_patience=cfg.early_stop_patience,
                      early_stop_delta=cfg.early_stop_delta,
-                     min_epochs=cfg.min_epochs,
                      # use_tensorboard=True,  # 默认启用；writer 由 trainer 内部创建/关闭，
                      #                        # 日志在 save_dir/tensorboard，查看：
                      #                        # tensorboard --logdir checkpoints

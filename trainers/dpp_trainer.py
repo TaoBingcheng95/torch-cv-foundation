@@ -44,19 +44,25 @@ class DDPTrainer(BaseTrainer):
 
     - 进程组：构造时自动 setup_distributed()；未经 torchrun 启动时
       退化为单进程，行为与 BaseTrainer 完全一致
+    - 模型：构造时通过 _wrap_model 钩子套 DistributedDataParallel（先于 .to(device)），
+      torch.compile 在父类 init_settings 中再包一层，形成 compile(DDP(model)) —— 官方推荐顺序
     - 设备：由 LOCAL_RANK 决定（CUDA → cuda:local_rank；否则 CPU + gloo，
       DDP 不支持 MPS），传入的 device 参数在分布式模式下被覆盖
     - 数据：自动用 DistributedSampler 重建 train/val/test loader（分片），
       每轮训练前 sampler.set_epoch 保证各 epoch shuffle 不同
-    - 聚合：原生 PyTorch 指标类（ClassificationMetric / SegmentationMetric）
+    - 损失聚合：覆写 _aggregate_loss 钩子，在 epoch 末尾 ``if total_samples==0``
+      检查前跨 rank all_reduce(SUM) total_loss 与 total_samples；
+      下游 avg_loss 天然得到全局加权均值，OOM 全空时各 rank 同步看到 0 信号避免死锁
+    - 指标聚合：原生 PyTorch 指标类（ClassificationMetric / SegmentationMetric）
       在 compute 前显式 all_reduce 混淆矩阵（全局精确）；
-      train/val/test 的 loss 跨 rank 取均值
+      torchmetrics 指标无 all_reduce()，其 compute() 自动同步 DDP
     - 落盘：仅 rank0 写 checkpoint / 日志文件 / 曲线图 / TensorBoard，
       输出目录时间戳由 rank0 广播，所有 rank 共享同一目录路径
 
     使用约束：
     - 启动：torchrun --nproc_per_node=N train.py；所有 rank 都要调用
       fit() / test()（内含集合通信，缺席会死锁），结束后调 cleanup()
+      或用 ``with DDPTrainer(...) as trainer:`` 上下文管理器自动清理
     - val/test 集不能被 world_size 整除时，DistributedSampler 会补齐重复
       样本，全局指标有微小偏差；精确评估请单进程运行
     - 父类的 OOM 跳批容错在 DDP 下不可依赖：某 rank 跳批会造成梯度同步
@@ -136,13 +142,9 @@ class DDPTrainer(BaseTrainer):
         self.val_loader = self._shard_loader(self.val_loader, shuffle=False)
         self.test_loader = self._shard_loader(self.test_loader, shuffle=False)
 
-        # 3) DDP 包装（在父类的 torch.compile 之前：官方推荐
-        #    torch.compile(DDP(model)) 的包装顺序）
-        self.model = DistributedDataParallel(
-            self.model,
-            device_ids=[self.local_rank] if self.device.type == 'cuda' else None,
-            find_unused_parameters=self.find_unused_parameters,
-        )
+        # 3) DDP 包装已在 __init__ 的 _wrap_model 钩子中完成（先于 .to(device)）；
+        #    torch.compile 在父类 init_settings 中对 DDP(model) 再包装，
+        #    形成 compile(DDP(model)) —— 官方推荐的包装顺序
 
         # 4) rank 分工
         if self.is_main:
@@ -157,7 +159,7 @@ class DDPTrainer(BaseTrainer):
             self.visualizer = _NoopVisualizer()
             self._detect_scheduler_type()
             if self.resume:
-                self.load_model(self.resume, resume=True)
+                self.load_checkpoint(self.resume, resume=True)
             if self.metrics is None:
                 # 与 BaseTrainer.init_settings 同步：按任务类型选择计算器
                 self.metrics = (ClassificationMetric(self.num_classes)
@@ -212,53 +214,85 @@ class DDPTrainer(BaseTrainer):
         )
 
 
-    def _unwrap_model(self) -> nn.Module:
-        """剥离 torch.compile（_orig_mod）与 DDP（module）两层包装，取原始模型"""
-        model = getattr(self.model, '_orig_mod', self.model)
-        return getattr(model, 'module', model)
+    def _wrap_model(self, model: nn.Module) -> nn.Module:
+        """套 DistributedDataParallel；非分布式模式原样返回（退化为 BaseTrainer）。
+
+        DDP 要求模型已在目标设备上（device_ids 指向的 GPU），故先 .to(device)
+        再包装；基类 __init__ 随后对返回值 .to(device) 是 no-op，不会重复搬运。
+        CPU(gloo) 下不传 device_ids（NCCL 才需要）。
+        """
+        if not self.distributed:
+            return model
+        model = model.to(self.device)
+        kwargs = dict(find_unused_parameters=self.find_unused_parameters)
+        if self.device.type == 'cuda':
+            kwargs['device_ids'] = [self.local_rank]
+        return DistributedDataParallel(model, **kwargs)
+
+
+    def _aggregate_loss(self, total_loss, total_samples):
+        """跨 rank all_reduce(SUM) total_loss 张量与 total_samples 标量。
+
+        覆写基类 no-op 钩子：训练/验证/测试 epoch 末尾在 ``if total_samples == 0``
+        检查前先做一次跨 rank 同步，所有 rank 完成后返回同一
+        (global_loss, global_samples)：
+
+        - 损失指标计算口径一致：下游 ``avg_loss = total_loss / total_samples``
+          得到全局加权均值，train/loss、val/loss、test/loss 各 rank 完全一致
+        - OOM 全空时跨 rank 同步：某 rank 数据量极少全空抛异常退出时，其他
+          rank 也能通过 all_reduce 收到 total_samples=0 信号一起抛，避免
+          部分进程已退出、其他进程卡在 ``metric.compute()`` 的 all_reduce 上死锁
+          （指标同步依赖 torchmetrics 内置 sync，见类 docstring）
+
+        非分布式模式（torchrun 未启动，DDPTrainer 退化为单进程）走基类 no-op。
+        """
+        if not self.distributed:
+            return super()._aggregate_loss(total_loss, total_samples)
+        # total_loss: 张量，all_reduce(SUM) 返回张量；
+        # total_samples: int → 转 float reduce 后再转回 int
+        global_loss = reduce_value(total_loss, average=False)
+        global_samples = int(reduce_value(total_samples, average=False))
+        return global_loss, global_samples
 
 
     def train_epoch(self) -> Dict[str, Any]:
-        """训练一轮：set_epoch 保证分片 shuffle 逐轮不同，loss 跨 rank 聚合"""
+        """训练一轮：set_epoch 保证分片 shuffle 逐轮不同；loss 由 _aggregate_loss 跨 rank 聚合"""
         if self.distributed:
             # 不 set_epoch 则每个 epoch 的分片 shuffle 相同，等于没有 shuffle
             self.train_loader.sampler.set_epoch(self.current_epoch)
-        results = super().train_epoch()
-        if self.distributed:
-            # 各 rank 分片大小相同（DistributedSampler 补齐），直接平均即可；
-            # 同步修正内存曲线列表，rank0 绘图/History 用全局值
-            results['loss'] = reduce_value(results['loss'], average=True)
-            if self.train_loss_all:
-                self.train_loss_all[-1] = results['loss']
-        return results
+        # 父类 train_epoch 在 if total_samples==0 检查前调 _aggregate_loss，
+        # 已将 total_loss / total_samples 跨 rank all_reduce(SUM)；
+        # 下游 avg_loss = total_loss / total_samples 自然得到全局加权均值，
+        # train_loss_all.append 的也是全局值，rank0 绘图/History 无需后处理
+        return super().train_epoch()
 
 
     def evaluate_epoch(self) -> Dict[str, Any]:
-        """验证一轮：先 all_reduce 混淆矩阵，再让父类 compute 全局指标"""
+        """验证一轮：先 all_reduce 混淆矩阵，再让父类 compute 全局指标；loss 由 _aggregate_loss 聚合"""
         if self.distributed and hasattr(self._val_metric, 'all_reduce'):
             # 父类 evaluate_epoch 内部 self.metrics = self._val_metric 会绕过
             # _DistributedMetrics 包装器，因此需在此显式 all_reduce；
             # reset() 后首次 compute 前调用一次即可，all_reduce 原地修改矩阵
             # torchmetrics 指标无 all_reduce()，其 compute() 自动同步 DDP
             self._val_metric.all_reduce()
-        results = super().evaluate_epoch()
-        if self.distributed:
-            results['loss'] = reduce_value(results['loss'], average=True)
-            # 回写全局 loss 到内存曲线（rank0 绘图 / hparam 用）；
-            # super().evaluate_epoch()._append_val_metrics 已 append 本地值，此处覆盖为全局
-            val_loss_hist = self.val_metrics_history.get('val/loss')
-            if val_loss_hist:
-                val_loss_hist[-1] = results['loss']
-        return results
+        # 父类 evaluate_epoch 在 if total_samples==0 检查前调 _aggregate_loss，
+        # 已将 total_loss / total_samples 跨 rank all_reduce(SUM)；
+        # val_loss_all.append 的也是全局值，rank0 绘图/hparam 无需后处理
+        return super().evaluate_epoch()
 
 
-    def save_model(self, filename: str,
-                   checkpoint: Optional[Dict[str, Any]] = None) -> str:
-        """仅 rank0 落盘；写完后 barrier，保证其他 rank 后续可安全读取"""
+    def save_checkpoint(self, filename: str,
+                        checkpoint: Optional[Dict[str, Any]] = None) -> str:
+        """仅 rank0 落盘；写完后 barrier，保证其他 rank 后续可安全读取。
+
+        覆写基类 save_checkpoint：基类 fit() 在每个 epoch 末调
+        ``self.save_checkpoint('best.pt'/'last.pt', ...)``，若不门控则所有 rank
+        并发写同一文件会互相覆盖（best.pt 可能保存到非最优 rank 的权重）。
+        """
         if not self.distributed:
-            return super().save_model(filename, checkpoint)
+            return super().save_checkpoint(filename, checkpoint)
         if self.is_main:
-            path = super().save_model(filename, checkpoint)
+            path = super().save_checkpoint(filename, checkpoint)
         else:
             path = str(self.save_dir / filename)
         barrier()
@@ -269,6 +303,11 @@ class DDPTrainer(BaseTrainer):
         """训练历史曲线仅由 rank0 维护（非主进程的 History 为替身，无需恢复）"""
         if not self.distributed or self.is_main:
             super()._restore_history(src_log)
+
+    def _restore_tensorboard(self, src_tb_dir: Path) -> None:
+        """TensorBoard 事件文件迁移仅由 rank0 执行（非主进程的 tb_logger 为禁用实例）"""
+        if not self.distributed or self.is_main:
+            super()._restore_tensorboard(src_tb_dir)
 
 
     @torch.no_grad()
@@ -304,16 +343,38 @@ class DDPTrainer(BaseTrainer):
             save_error_index=save_error_index,
             save_predictions=save_predictions,
         )
-
-        if self.distributed and results is not None:
-            results['loss'] = reduce_value(results['loss'], average=True)
-            results['samples'] = int(reduce_value(float(results['samples']),
-                                                  average=False))
-            # 混淆矩阵已在 basetrainer.test() 中通过 .confusion_matrix 属性
-            # 获取（内部触发 all_reduce），此处无需重复计算
+        # 父类 test 在 if total_samples==0 检查前调 _aggregate_loss，
+        # 已将 total_loss / total_samples 跨 rank all_reduce(SUM)；
+        # results['loss']、results['samples'] 已是全局值，无需后处理。
+        # 混淆矩阵在 basetrainer.test() 中通过 .confusion_matrix 属性获取，
+        # 内部已 all_reduce，亦无需重复计算
         return results
 
 
     def cleanup(self) -> None:
-        """销毁进程组（脚本结束前调用；内含 barrier，确保各 rank 都完成）"""
+        """销毁进程组（脚本结束前调用；内含 barrier，确保各 rank 都完成）
+
+        幂等：多次调用安全（用 _cleaned_up 标记位防止重复销毁）；
+        非分布式模式直接返回（未初始化进程组，无可销毁资源）。
+        """
+        if getattr(self, '_cleaned_up', False):
+            return
+        if not self.distributed:
+            # 单进程退化模式：仅清理父类资源（history 已在 fit 末尾关闭，
+            # 此处确保即使异常退出也释放 persistent workers）
+            super().cleanup() if hasattr(super(), 'cleanup') else None
+            self._cleaned_up = True
+            return
+        # 分布式模式：barrier 保证各 rank 都完成后续操作（避免某 rank
+        # 退出后其他 rank 卡在未完成的集合通信上），再销毁进程组
         cleanup_distributed()
+        self._cleaned_up = True
+
+    def __enter__(self):
+        """支持 ``with DDPTrainer(...) as trainer:`` 用法，退出时自动 cleanup"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """异常退出时也确保进程组销毁，避免僵尸进程或 NCCL 句柄泄漏"""
+        self.cleanup()
+        return False  # 不吞异常，让上层感知

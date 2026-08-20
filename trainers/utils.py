@@ -11,6 +11,42 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Iterator
 
+import numpy as np
+
+# torch 为可选依赖：History 本身不需要 torch，但训练日志的指标值常以
+# torch.Tensor 形式传入，import 失败时回退到 None 即可（_to_scalar 内部判空）
+try:
+    import torch as _torch
+except ImportError:  # pragma: no cover
+    _torch = None  # type: ignore
+
+
+def _to_scalar(v: Any) -> Any:
+    """
+    将指标值统一序列化为 csv 可写的 Python 原生标量。
+
+    处理顺序（按常见度）：
+      1. bool/int/float/str：原样返回（bool 必须在 int 前判，因 bool 是 int 子类）
+      2. torch.Tensor：0-dim 取 .item()；多元素张量转 numpy → 列表，避免
+         str(t) 写出 "tensor(0.97, device='cuda:0')"
+      3. numpy.generic / 0-dim ndarray：取 .item()
+      4. 其他类型：回退原值（极少出现，如时间字符串）
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float, str)):
+        return v
+    if _torch is not None and isinstance(v, _torch.Tensor):
+        if v.dim() == 0:
+            return v.item()
+        # 多元素张量：转 numpy 再转 list，csv 会按列表序列化
+        return v.detach().cpu().numpy().tolist()
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, np.ndarray):
+        return v.item() if v.ndim == 0 else v.tolist()
+    return v
+
 
 @dataclass
 class TrainConfig:
@@ -64,6 +100,13 @@ class TrainConfig:
     gpus: int = 1
     ddp_port: int = 29500
     ddp_backend: str = 'nccl'
+
+    # -- 复现 --
+    seed: int = 42
+
+    # -- 性能 --
+    amp: bool = False
+    deterministic: bool = False
 
 
 
@@ -128,6 +171,10 @@ class History:
                 f"已忽略（后续相同情况不再提示）"
             )
             self._warned_unknown = True
+
+        # 统一序列化：torch.Tensor / numpy 标量 → Python 原生标量，
+        # 避免 csv 写出 "tensor(0.97, device='cuda:0')"
+        record = {k: _to_scalar(v) for k, v in record.items()}
 
         writer = self._get_file_handle()
         writer.writerow(record)

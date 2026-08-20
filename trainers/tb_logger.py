@@ -135,7 +135,7 @@ class TensorBoardLogger:
         hparams: Dict[str, Any] = {
             'model': type(trainer._unwrap_model()).__name__,
             'criterion': type(trainer.criterion).__name__,
-            'epochs': trainer.epochs,
+            'epochs': trainer.max_epochs,
             'use_amp': trainer.use_amp,
             'monitor': trainer.monitor,
         }

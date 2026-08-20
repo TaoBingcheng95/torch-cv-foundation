@@ -135,7 +135,7 @@ def set_logging(name=LOGGING_NAME, verbose=VERBOSE, log_file=None, use_color=Non
     return logger
 
 
-def get_logger(name=LOGGING_NAME):
+def get_logger(name=LOGGING_NAME) -> logging.Logger:
     """获取具名 logger；若尚未配置则惰性完成默认配置。"""
     logger = logging.getLogger(name)
     if not logger.handlers:
@@ -163,6 +163,7 @@ def add_file_handler(logger, log_file, level=None):
     file_handler.setLevel(level if level is not None else logger.level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     logger.addHandler(file_handler)
+
     return logger
 
 
