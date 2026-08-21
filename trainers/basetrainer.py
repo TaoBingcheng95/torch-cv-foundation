@@ -1029,7 +1029,7 @@ class BaseTrainer:
                         'val/acc': val_metrics['val/acc'],
                         'val/loss': val_metrics['val/loss'],
                         'epoch': self.current_epoch,
-                        'model_state_dict': self._unwrap_model().state_dict(),
+                        'state_dict': self._unwrap_model().state_dict(),
                         'optimizer': self.optimizer.state_dict(),
                         'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
                         'scaler': self.scaler.state_dict() if self.scaler.is_enabled() else None,
@@ -1075,7 +1075,7 @@ class BaseTrainer:
             # ========== ✅ 保存最新模型 (last.pt) ==========
             last_checkpoint = {
                 'epoch': self.current_epoch,
-                'model_state_dict': self._unwrap_model().state_dict(),
+                'state_dict': self._unwrap_model().state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'lr_schedule': self.scheduler.state_dict() if self.scheduler else None,
                 'scaler': self.scaler.state_dict() if self.scaler.is_enabled() else None,
@@ -1725,11 +1725,11 @@ class BaseTrainer:
         try:
             checkpoint = torch.load(checkpoint_fn, weights_only=True, map_location=self.device)
 
-            # 兼容多种格式：完整 checkpoint 字典（model_state_dict / model 旧键）/ 纯 state_dict
+            # 兼容多种格式：完整 checkpoint 字典（model_state_dict / state_dict）/ 纯 state_dict
             if 'model_state_dict' in checkpoint:
                 state_dict = checkpoint['model_state_dict']
-            elif 'model' in checkpoint:  # 旧版 last.pt 用 'model' 键
-                state_dict = checkpoint['model']
+            elif 'model' in checkpoint:
+                state_dict = checkpoint['state_dict']
             else:
                 state_dict = checkpoint
             self._load_state_dict(state_dict, checkpoint_fn)
