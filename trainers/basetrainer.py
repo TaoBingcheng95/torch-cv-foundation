@@ -1728,7 +1728,7 @@ class BaseTrainer:
             # 兼容多种格式：完整 checkpoint 字典（model_state_dict / state_dict）/ 纯 state_dict
             if 'model_state_dict' in checkpoint:
                 state_dict = checkpoint['model_state_dict']
-            elif 'model' in checkpoint:
+            elif 'state_dict' in checkpoint:
                 state_dict = checkpoint['state_dict']
             else:
                 state_dict = checkpoint
