@@ -1,3 +1,18 @@
+"""
+ResNet 教学实现（CH1）：残差连接、梯度流、深度网络的瓶颈突破。
+
+文件包含三层实现，建议按顺序阅读：
+    1. 基础组件：conv3x3 / conv1x1 / BasicBlock / Bottleneck
+       —— 残差学习的最小单元，重点理解 identity 短路与 downsample 分支。
+    2. 硬编码教学版：ResNet18 / ResNet50
+       —— 将层级结构完全展开，便于逐层阅读；与通用版参数量完全一致
+         （ResNet18: 11.69M，ResNet50: 25.56M）。
+    3. 通用版：ResNet + _make_layer + 工厂函数（build_resnet / resnet18 / resnet34 / resnet50）
+       —— torchvision 风格，支持任意层数配置与预训练权重加载。
+
+注意：Bottleneck 采用 ResNet V1.5 变体（stride 放在 3×3 卷积而非首个 1×1 卷积），
+与 torchvision 官方实现一致，略优于原论文。
+"""
 
 from typing import Any, Callable, Optional, Union
 
@@ -156,7 +171,7 @@ class Bottleneck(nn.Module):
 
 
 
-cfgs: dict[str, list[Union[str, int]]] = {
+cfgs: dict[str, tuple[type[Union[BasicBlock, Bottleneck]], list[int]]] = {
     "resnet18": [BasicBlock, [2, 2, 2, 2]],
     "resnet34": [BasicBlock, [3, 4, 6, 3]],
     "resnet50": [Bottleneck, [3, 4, 6, 3]], 
@@ -518,7 +533,7 @@ def _resnet(
     progress: bool=False,
     **kwargs: Any,
     ) -> ResNet:
-    if weights is not None and _ovewrite_named_param:
+    if weights is not None:
         _ovewrite_named_param(kwargs, "num_classes", len(weights.meta["categories"]))
 
     model = ResNet(block, layers, **kwargs)

@@ -1,3 +1,20 @@
+"""
+U-Net 教学实现（CH1）：编码器-解码器架构、跳跃连接、分割任务。
+
+文件结构：
+    DoubleConv   —— 核心卷积块 (3x3 Conv => BN => ReLU) × 2
+    EncoderBlock —— 下采样模块（DoubleConv + MaxPool），返回 skip 特征与池化结果
+    DecoderBlock —— 上采样模块（Upsample + 1×1 通道对齐 + Skip 拼接 + DoubleConv）
+    UNet         —— 完整网络（4 级编码器 + 4 级解码器 + 1×1 输出层）
+
+与原论文（Ronneberger et al., 2015）的三处刻意差异（均为现代实现的通用做法）：
+    1. 卷积使用 padding=1（原论文为 valid 卷积，特征图逐级缩小，输出 388×388）；
+       本实现保证输入输出同形状，支持任意尺寸输入。
+    2. 上采样使用 bilinear Upsample + 1×1 卷积对齐通道
+       （原论文使用 2×2 转置卷积同时上采样并减半通道）。
+    3. 每个卷积后接 BatchNorm2d（原论文无归一化层）。
+
+"""
 import os
 import torch
 import torch.nn as nn
@@ -13,11 +30,11 @@ class DoubleConv(nn.Module):
     核心卷积块：(3x3 Conv => ReLU) * 2
     这是 U-Net 中 Encoder 和 Decoder 的基本组成单元。
     """
-    def __init__(self, in_channels, out_channels, mid_channels=None):
+    def __init__(self, in_channels:int, out_channels: int, mid_channels=None):
         super().__init__()
         # 注意：这里使用了 padding=1，这是现代实现支持任意尺寸输入的关键！
         # 原论文没有 padding，会导致特征图不断缩小。
-        if not mid_channels:
+        if mid_channels is None:
             mid_channels = out_channels
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
